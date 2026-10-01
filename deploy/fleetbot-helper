@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+# fleetbot-helper: the ONLY Fleetbot component that runs as root.
+#
+# The control plane (user "fleetbot") calls it through a single sudoers rule:
+#   fleetbot ALL=(root) NOPASSWD: /usr/local/sbin/fleetbot-helper
+#
+# Every argument is validated against a strict allowlist before it touches the
+# system. Secrets (passwords, webhook secrets) are read from stdin, never argv,
+# so they never show up in `ps` output or shell history.
+set -euo pipefail
+umask 077
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+readonly FLEET_DIR=/opt/fleetbot
+readonly INSTANCES_DIR="$FLEET_DIR/instances"
+readonly CONTROL_USER=fleetbot
+readonly WEB_USER=www-data
+readonly NGINX_AVAILABLE=/etc/nginx/sites-available
+readonly NGINX_ENABLED=/etc/nginx/sites-enabled
+
+readonly RE_SLUG='^[a-z][a-z0-9-]{1,27}[a-z0-9]$'
+readonly RE_DOMAIN='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
+readonly RE_DB_IDENT='^fb_[a-z0-9_]{3,29}$'
+readonly RE_HOOK='^[A-Za-z0-9_.-]{1,64}(/[A-Za-z0-9_.-]{1,64}){0,3}$'
+readonly RE_SECRET='^[A-Za-z0-9_-]{32,256}$'
+readonly RE_DB_PASSWORD='^[A-Za-z0-9]{24,128}$'
+readonly RE_PHP_VERSION='^[0-9]\.[0-9]$'
+readonly RE_EMAIL='^[^[:space:]@]+@[^[:space:]@]+\.[A-Za-z]{2,}$'
+
+die() { echo "fleetbot-helper: $*" >&2; exit 1; }
+need_args() { [[ $1 -eq $2 ]] || die "expected $2 argument(s), got $1"; }
+
+check_slug() { [[ $1 =~ $RE_SLUG ]] || die "invalid slug"; }
+check_domain() { [[ ${#1} -le 253 && $1 =~ $RE_DOMAIN ]] || die "invalid domain"; }
+check_db_ident() { [[ $1 =~ $RE_DB_IDENT ]] || die "invalid database identifier"; }
+check_hook() { [[ $1 =~ $RE_HOOK && $1 != *..* ]] || die "invalid webhook path"; }
+
+read_stdin_value() {
+  local value=""
+  IFS= read -r value || true
+  printf '%s' "$value"
+}
+
+php_version() {
+  local v
+  v="$(cat /etc/fleetbot/php-version 2>/dev/null || true)"
+  [[ $v =~ $RE_PHP_VERSION ]] || die "PHP version is not configured in /etc/fleetbot/php-version"
+  printf '%s' "$v"
+}
+
+instance_user() { printf 'fb-%s' "$1"; }
+instance_dir() { printf '%s/%s' "$INSTANCES_DIR" "$1"; }
+pool_file() { printf '/etc/php/%s/fpm/pool.d/fleetbot-%s.conf' "$2" "$1"; }
+vhost_file() { printf '%s/fleetbot-%s.conf' "$NGINX_AVAILABLE" "$1"; }
+vhost_link() { printf '%s/fleetbot-%s.conf' "$NGINX_ENABLED" "$1"; }
+
+config_ok() {
+  "php-fpm$1" -t >/dev/null 2>&1 && nginx -t >/dev/null 2>&1
+}
+
+reload_services() {
+  systemctl reload "php$1-fpm"
+  systemctl reload nginx
+}
+
+ensure_instance_user() {
+  local user="$1" dir="$2"
+  if ! id -u "$user" >/dev/null 2>&1; then
+    useradd --system --user-group --no-create-home --home-dir "$dir" --shell /usr/sbin/nologin "$user"
+  fi
+}
+
+require_instance_dir() {
+  local dir="$1"
+  [[ -d $dir && ! -L $dir ]] || die "instance directory does not exist"
+}
+
+# instance-perms SLUG
+# Bot files belong to the per-instance user; the control plane gets access
+# through an ACL, nginx only gets directory traversal (no file reads).
+cmd_instance_perms() {
+  need_args $# 1
+  local slug="$1" user dir
+  check_slug "$slug"
+  user="$(instance_user "$slug")"
+  dir="$(instance_dir "$slug")"
+  require_instance_dir "$dir"
+  ensure_instance_user "$user" "$dir"
+  chown -R -P "$user:$user" "$dir"
+  chmod -R u=rwX,g=rX,o= "$dir"
+  setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:X,d:u:$WEB_USER:X" "$dir"
+}
+
+# instance-create SLUG DOMAIN WEBHOOK_PATH   (stdin: webhook secret)
+cmd_instance_create() {
+  need_args $# 3
+  local slug="$1" domain="$2" hook="$3" secret user dir php pool vhost link
+  check_slug "$slug"
+  check_domain "$domain"
+  check_hook "$hook"
+  secret="$(read_stdin_value)"
+  [[ $secret =~ $RE_SECRET ]] || die "invalid webhook secret"
+
+  user="$(instance_user "$slug")"
+  dir="$(instance_dir "$slug")"
+  php="$(php_version)"
+  pool="$(pool_file "$slug" "$php")"
+  vhost="$(vhost_file "$slug")"
+  link="$(vhost_link "$slug")"
+  require_instance_dir "$dir"
+  ensure_instance_user "$user" "$dir"
+
+  cat > "$pool" <<EOF
+; Managed by Fleetbot. Instance: $slug
+[fleetbot-$slug]
+user = $user
+group = $user
+listen = /run/php/fleetbot-$slug.sock
+listen.owner = $WEB_USER
+listen.group = $WEB_USER
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 8
+pm.process_idle_timeout = 60s
+pm.max_requests = 500
+chdir = $dir
+php_admin_value[open_basedir] = $dir/:/tmp/
+php_admin_value[error_log] = $dir/php-error.log
+php_admin_flag[log_errors] = on
+php_admin_flag[display_errors] = off
+EOF
+
+  cat > "$vhost" <<EOF
+# Managed by Fleetbot. Instance: $slug
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $domain;
+    root $dir;
+    index index.php;
+    client_max_body_size 32m;
+    access_log /var/log/nginx/fleetbot-$slug.access.log;
+    error_log /var/log/nginx/fleetbot-$slug.error.log;
+
+    # Never serve dotfiles, dumps, logs, configs or dependencies
+    location ~ /\.(?!well-known/) { deny all; }
+    location ~* \.(sql|log|ini|env|bak|sh|lock|md)\$ { deny all; }
+    location ~ ^/(config\.php|config/|vendor/) { deny all; }
+
+    # Telegram webhook: only requests carrying our secret token reach PHP
+    location = /$hook {
+        if (\$http_x_telegram_bot_api_secret_token != "$secret") { return 403; }
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/fleetbot-$slug.sock;
+    }
+
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/fleetbot-$slug.sock;
+    }
+
+    location / { try_files \$uri \$uri/ =404; }
+}
+EOF
+
+  ln -sfn "$vhost" "$link"
+  if ! config_ok "$php"; then
+    rm -f "$pool" "$vhost" "$link"
+    die "generated configuration failed validation; nothing was enabled"
+  fi
+  reload_services "$php"
+}
+
+# instance-enable SLUG
+cmd_instance_enable() {
+  need_args $# 1
+  local slug="$1" php pool vhost link
+  check_slug "$slug"
+  php="$(php_version)"
+  pool="$(pool_file "$slug" "$php")"
+  vhost="$(vhost_file "$slug")"
+  link="$(vhost_link "$slug")"
+  [[ -f $vhost ]] || die "instance is not provisioned"
+  if [[ -f "$pool.disabled" ]]; then mv -f "$pool.disabled" "$pool"; fi
+  [[ -f $pool ]] || die "php-fpm pool is missing"
+  ln -sfn "$vhost" "$link"
+  if ! config_ok "$php"; then
+    rm -f "$link"
+    die "configuration test failed; instance left disabled"
+  fi
+  reload_services "$php"
+}
+
+# instance-disable SLUG
+cmd_instance_disable() {
+  need_args $# 1
+  local slug="$1" php pool
+  check_slug "$slug"
+  php="$(php_version)"
+  pool="$(pool_file "$slug" "$php")"
+  rm -f "$(vhost_link "$slug")"
+  if [[ -f $pool ]]; then mv -f "$pool" "$pool.disabled"; fi
+  config_ok "$php" || die "configuration test failed after disabling"
+  reload_services "$php"
+}
+
+# instance-remove SLUG  (idempotent)
+cmd_instance_remove() {
+  need_args $# 1
+  local slug="$1" php pool user dir real
+  check_slug "$slug"
+  php="$(php_version)"
+  pool="$(pool_file "$slug" "$php")"
+  user="$(instance_user "$slug")"
+  dir="$(instance_dir "$slug")"
+
+  rm -f "$(vhost_link "$slug")" "$(vhost_file "$slug")" "$pool" "$pool.disabled"
+  if config_ok "$php"; then reload_services "$php"; fi
+
+  if [[ -L $dir ]]; then die "refusing to remove symlinked instance directory"; fi
+  if [[ -e $dir ]]; then
+    real="$(realpath -e -- "$dir")"
+    [[ $real == "$INSTANCES_DIR/$slug" ]] || die "refusing to remove unexpected path"
+    rm -rf --one-file-system -- "$dir"
+  fi
+
+  if id -u "$user" >/dev/null 2>&1; then
+    pkill -u "$user" >/dev/null 2>&1 || true
+    userdel "$user" >/dev/null 2>&1 || true
+  fi
+  if getent group "$user" >/dev/null 2>&1; then groupdel "$user" >/dev/null 2>&1 || true; fi
+}
+
+# db-create DB_NAME DB_USER   (stdin: password)  (idempotent, rotates password)
+cmd_db_create() {
+  need_args $# 2
+  local db="$1" user="$2" password
+  check_db_ident "$db"
+  check_db_ident "$user"
+  password="$(read_stdin_value)"
+  [[ $password =~ $RE_DB_PASSWORD ]] || die "invalid database password"
+  mysql --protocol=socket -u root <<SQL
+CREATE DATABASE IF NOT EXISTS \`$db\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$user'@'localhost' IDENTIFIED BY '$password';
+ALTER USER '$user'@'localhost' IDENTIFIED BY '$password';
+GRANT ALL PRIVILEGES ON \`$db\`.* TO '$user'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+}
+
+# db-drop DB_NAME DB_USER  (idempotent)
+cmd_db_drop() {
+  need_args $# 2
+  local db="$1" user="$2"
+  check_db_ident "$db"
+  check_db_ident "$user"
+  mysql --protocol=socket -u root <<SQL
+DROP DATABASE IF EXISTS \`$db\`;
+DROP USER IF EXISTS '$user'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+}
+
+# cert-issue DOMAIN
+cmd_cert_issue() {
+  need_args $# 1
+  local domain="$1" email out
+  check_domain "$domain"
+  local args=(--nginx -d "$domain" --non-interactive --agree-tos --redirect --keep-until-expiring)
+  email="$(cat /etc/fleetbot/acme-email 2>/dev/null || true)"
+  if [[ $email =~ $RE_EMAIL ]]; then
+    args+=(--email "$email")
+  else
+    args+=(--register-unsafely-without-email)
+  fi
+  if ! out="$(certbot "${args[@]}" 2>&1)"; then
+    printf '%s\n' "$out" | tail -n 5 >&2
+    die "certificate issuance failed for $domain (does DNS point to this server and is port 80 reachable?)"
+  fi
+}
+
+main() {
+  [[ $EUID -eq 0 ]] || die "must run as root"
+  local cmd="${1:-}"
+  if [[ $# -gt 0 ]]; then shift; fi
+  case "$cmd" in
+    instance-create)  cmd_instance_create "$@" ;;
+    instance-perms)   cmd_instance_perms "$@" ;;
+    instance-enable)  cmd_instance_enable "$@" ;;
+    instance-disable) cmd_instance_disable "$@" ;;
+    instance-remove)  cmd_instance_remove "$@" ;;
+    db-create)        cmd_db_create "$@" ;;
+    db-drop)          cmd_db_drop "$@" ;;
+    cert-issue)       cmd_cert_issue "$@" ;;
+    *) die "unknown command '${cmd}'" ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Fleetbot operator CLI. Most commands require root.
+set -euo pipefail
+
+FLEET_DIR=/opt/fleetbot
+APP_DIR="$FLEET_DIR/app"
+DATA_DIR="$FLEET_DIR/data"
+SERVICE_USER=fleetbot
+HEALTH_URL=http://127.0.0.1:3000/api/health
+
+usage() {
+  cat <<'EOF'
+Usage: fleetbot <command>
+
+  status                     Service status and health check
+  logs [N]                   Show the last N log lines (default 100)
+  restart                    Restart the control plane
+  admins                     List administrators
+  create-admin USER [--role ROLE]
+  reset-password USER        Set a new password and revoke all of USER's sessions
+  update                     Pull, rebuild and restart; rolls back if the health check fails
+EOF
+}
+
+need_root() { [[ $EUID -eq 0 ]] || { echo "This command needs root: sudo fleetbot $*" >&2; exit 1; }; }
+app_cli() { sudo -u "$SERVICE_USER" env "FLEET_DIR=$FLEET_DIR" node "$APP_DIR/dist/cli.js" "$@"; }
+
+healthy() {
+  local _
+  for _ in $(seq 1 20); do
+    curl -fsS "$HEALTH_URL" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 1
+}
+
+build() {
+  (
+    cd "$APP_DIR"
+    npm install --no-audit --no-fund --loglevel=error
+    npm run build --silent
+    npm prune --omit=dev --no-audit --no-fund --loglevel=error
+  )
+}
+
+cmd_update() {
+  local prev snapshot
+  prev="$(git -C "$APP_DIR" rev-parse HEAD)"
+  snapshot="$FLEET_DIR/backups/control-plane-$(date -u +%Y%m%dT%H%M%SZ).db"
+
+  echo "Stopping service and snapshotting the control-plane database..."
+  systemctl stop fleetbot.service
+  install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$DATA_DIR/fleetbot.db" "$snapshot"
+
+  rollback() {
+    echo "Update failed: rolling back to ${prev:0:12}" >&2
+    git -C "$APP_DIR" reset --quiet --hard "$prev"
+    build || true
+    install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$snapshot" "$DATA_DIR/fleetbot.db"
+    rm -f "$DATA_DIR/fleetbot.db-wal" "$DATA_DIR/fleetbot.db-shm"
+    systemctl start fleetbot.service
+    exit 1
+  }
+
+  git -C "$APP_DIR" fetch --quiet --depth 1 origin main || rollback
+  git -C "$APP_DIR" reset --quiet --hard FETCH_HEAD || rollback
+  build || rollback
+  install -o root -g root -m 0755 "$APP_DIR/deploy/fleetbot-helper" /usr/local/sbin/fleetbot-helper
+  systemctl start fleetbot.service
+  healthy || rollback
+  echo "Updated ${prev:0:12} -> $(git -C "$APP_DIR" rev-parse --short=12 HEAD). DB snapshot: $snapshot"
+}
+
+case "${1:-}" in
+  status)
+    systemctl --no-pager status fleetbot.service || true
+    if curl -fsS "$HEALTH_URL"; then echo; else echo "health check FAILED" >&2; exit 1; fi
+    ;;
+  logs)
+    lines="${2:-100}"
+    [[ $lines =~ ^[0-9]{1,6}$ ]] || { echo "N must be a number" >&2; exit 1; }
+    journalctl -u fleetbot.service -n "$lines" --no-pager
+    ;;
+  restart) need_root restart; systemctl restart fleetbot.service ;;
+  admins) need_root admins; app_cli list-admins ;;
+  create-admin) need_root create-admin; shift; app_cli create-admin "$@" ;;
+  reset-password) need_root reset-password; shift; app_cli reset-password "$@" ;;
+  update) need_root update; cmd_update ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "Unknown command: $1" >&2; usage; exit 2 ;;
+esac
