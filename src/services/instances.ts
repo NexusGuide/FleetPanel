@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { DB } from '../db.js';
-import type { AuditLog } from '../audit.js';
+import type { ActorRef, AuditLog } from '../audit.js';
 import type { SecretStore } from '../secrets.js';
 import type { PrivilegedOps } from '../system/helper.js';
 import type { TelegramClient } from './telegram.js';
@@ -91,6 +91,17 @@ export class InstanceService {
     this.busy.delete(id);
   }
 
+  private auditFailure(actor: ActorRef, action: string, id: number, err: unknown): void {
+    this.d.audit.write({
+      actor,
+      action,
+      resource: 'instance',
+      resourceId: id,
+      status: 'FAILED',
+      metadata: { error: errorMessage(err).slice(0, 1000) },
+    });
+  }
+
   /** Called at boot: anything left half-done by a crash is flagged instead of silently "running". */
   recoverInterrupted(): void {
     const result = this.d.db
@@ -104,9 +115,16 @@ export class InstanceService {
     if (result.changes > 0) log.warn(`Flagged ${result.changes} interrupted instance(s) as error`);
   }
 
-  async create(input: CreateInstanceInput, actor: string): Promise<InstanceRow> {
+  async create(input: CreateInstanceInput, actor: ActorRef): Promise<InstanceRow> {
     // Fail fast on a bad token before touching the system.
     const bot = await this.d.telegram.getMe(input.bot_token);
+    // A bot has exactly one webhook: a second instance would silently steal its traffic.
+    const sameBot = this.d.db.prepare('SELECT slug FROM instances WHERE bot_username = ? COLLATE NOCASE').get(bot.username) as
+      | { slug: string }
+      | undefined;
+    if (sameBot) {
+      throw new HttpError(409, 'bot_in_use', `Bot @${bot.username} is already used by instance '${sameBot.slug}'.`);
+    }
     const ident = dbIdentFor(input.slug);
 
     let id: number;
@@ -143,7 +161,7 @@ export class InstanceService {
     return this.get(id);
   }
 
-  reprovision(id: number, actor: string): InstanceRow {
+  reprovision(id: number, actor: ActorRef): InstanceRow {
     const inst = this.get(id);
     if (inst.status !== 'error') {
       throw new HttpError(409, 'invalid_state', 'Only instances in the error state can be reprovisioned.');
@@ -154,13 +172,13 @@ export class InstanceService {
     return this.get(id);
   }
 
-  private provisionInBackground(id: number, actor: string, cleanFirst: boolean): void {
+  private provisionInBackground(id: number, actor: ActorRef, cleanFirst: boolean): void {
     this.busy.add(id);
     void this.provision(id, actor, cleanFirst).finally(() => this.unlock(id));
   }
 
   /** Never throws: the outcome is recorded on the instance row and in the audit log. */
-  private async provision(id: number, actor: string, cleanFirst: boolean): Promise<void> {
+  private async provision(id: number, actor: ActorRef, cleanFirst: boolean): Promise<void> {
     const inst = this.get(id);
     const provider = PROVIDERS[inst.provider];
     try {
@@ -214,7 +232,7 @@ export class InstanceService {
     }
   }
 
-  async start(id: number, actor: string): Promise<InstanceRow> {
+  async start(id: number, actor: ActorRef): Promise<InstanceRow> {
     const inst = this.get(id);
     if (inst.status === 'error') {
       throw new HttpError(409, 'instance_error', 'Instance is in the error state. Reprovision it first.');
@@ -225,12 +243,15 @@ export class InstanceService {
       this.setStatus(id, 'running');
       this.d.audit.write({ actor, action: 'INSTANCE_START', resource: 'instance', resourceId: id, status: 'SUCCESS' });
       return this.get(id);
+    } catch (err) {
+      this.auditFailure(actor, 'INSTANCE_START', id, err);
+      throw err;
     } finally {
       this.unlock(id);
     }
   }
 
-  async stop(id: number, actor: string): Promise<InstanceRow> {
+  async stop(id: number, actor: ActorRef): Promise<InstanceRow> {
     const inst = this.get(id);
     if (inst.status === 'error') {
       throw new HttpError(409, 'instance_error', 'Instance is in the error state. Reprovision or delete it.');
@@ -241,12 +262,15 @@ export class InstanceService {
       this.setStatus(id, 'stopped');
       this.d.audit.write({ actor, action: 'INSTANCE_STOP', resource: 'instance', resourceId: id, status: 'SUCCESS' });
       return this.get(id);
+    } catch (err) {
+      this.auditFailure(actor, 'INSTANCE_STOP', id, err);
+      throw err;
     } finally {
       this.unlock(id);
     }
   }
 
-  async remove(id: number, actor: string, withBackup: boolean): Promise<void> {
+  async remove(id: number, actor: ActorRef, withBackup: boolean): Promise<void> {
     const inst = this.get(id);
     this.lock(inst);
     try {
@@ -254,6 +278,7 @@ export class InstanceService {
         try {
           await this.d.backups.create(inst, 'pre-delete', actor);
         } catch (err) {
+          this.auditFailure(actor, 'INSTANCE_DELETE', id, err);
           throw new HttpError(
             500,
             'backup_failed',
@@ -272,6 +297,7 @@ export class InstanceService {
         await this.d.ops.dropDatabase(inst.db_name, inst.db_user);
       } catch (err) {
         this.setStatus(id, 'error', `Delete failed: ${errorMessage(err)}`);
+        this.auditFailure(actor, 'INSTANCE_DELETE', id, err);
         throw err;
       }
       this.d.db.prepare('DELETE FROM instances WHERE id = ?').run(id);
@@ -288,7 +314,7 @@ export class InstanceService {
     }
   }
 
-  async backup(id: number, actor: string): Promise<BackupRow> {
+  async backup(id: number, actor: ActorRef): Promise<BackupRow> {
     const inst = this.get(id);
     if (inst.status === 'error') throw new HttpError(409, 'instance_error', 'Cannot back up an instance in the error state.');
     this.lock(inst);
@@ -299,7 +325,7 @@ export class InstanceService {
     }
   }
 
-  async restore(backupId: string, actor: string): Promise<{ safety_backup_id: string }> {
+  async restore(backupId: string, actor: ActorRef): Promise<{ safety_backup_id: string }> {
     const backup = this.d.backups.get(backupId);
     if (backup.instance_id === null) {
       throw new HttpError(409, 'instance_deleted', 'The instance of this backup was deleted; restoring into a new instance is not supported yet.');

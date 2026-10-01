@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cookieParser from 'cookie-parser';
 import { ZodError } from 'zod';
@@ -9,6 +11,7 @@ import { authRoutes } from './routes/auth.js';
 import { adminRoutes } from './routes/admins.js';
 import { instanceRoutes } from './routes/instances.js';
 import { backupRoutes } from './routes/backups.js';
+import { systemRoutes } from './routes/system.js';
 import { HttpError } from '../errors.js';
 import { CommandError } from '../system/exec.js';
 import { log } from '../log.js';
@@ -61,6 +64,7 @@ export function createApp(d: AppDeps): express.Express {
   app.use('/api/admins', adminRoutes(d));
   app.use('/api/instances', instanceRoutes(d));
   app.use('/api/backups', backupRoutes(d));
+  app.use('/api/system', systemRoutes(d));
 
   app.get('/api/audit-logs', requirePermission('audit.read', d.audit), (req, res) => {
     const limit = Math.min(Math.max(Number.parseInt(String(req.query.limit ?? '100'), 10) || 100, 1), 500);
@@ -71,6 +75,22 @@ export function createApp(d: AppDeps): express.Express {
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'not_found' });
   });
+
+  serveWebUi(app, d.webDir);
   app.use(errorHandler);
   return app;
+}
+
+/** Serves the built single-page UI; unknown non-API GETs fall back to index.html. */
+function serveWebUi(app: express.Express, webDir: string | undefined): void {
+  if (!webDir) return;
+  const index = path.join(webDir, 'index.html');
+  if (!fs.existsSync(index)) return;
+  // Hashed asset names change on every build, so they can be cached forever.
+  app.use('/assets', express.static(path.join(webDir, 'assets'), { immutable: true, maxAge: '365d', index: false }));
+  app.use(express.static(webDir, { index: false, maxAge: '1h' }));
+  app.get('*', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(index);
+  });
 }

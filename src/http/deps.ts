@@ -12,4 +12,8 @@ export interface AppDeps {
   backups: BackupService;
   cookieSecure: boolean;
   trustProxy: string | boolean;
+  /** Filesystem path whose disk usage the dashboard reports. */
+  dataRoot: string;
+  /** Built web UI (index.html + assets). Omitted or missing = API only. */
+  webDir?: string;
 }

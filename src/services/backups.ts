@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import type { DB } from '../db.js';
-import type { AuditLog } from '../audit.js';
+import type { ActorRef, AuditLog } from '../audit.js';
 import type { SecretStore } from '../secrets.js';
 import type { PrivilegedOps } from '../system/helper.js';
 import { run } from '../system/exec.js';
@@ -84,7 +84,7 @@ export class BackupService {
     }
   }
 
-  async create(inst: InstanceRow, kind: BackupKind, actor = 'system'): Promise<BackupRow> {
+  async create(inst: InstanceRow, kind: BackupKind, actor: ActorRef = 'system'): Promise<BackupRow> {
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
     const id = `${stamp}-${randomToken(6).replace(/[^A-Za-z0-9]/g, 'x')}`;
     const filename = `${inst.slug}_${kind}_${id}.tar.gz`;
@@ -132,6 +132,14 @@ export class BackupService {
       return this.get(id);
     } catch (err) {
       await fs.rm(dest, { force: true });
+      this.d.audit.write({
+        actor,
+        action: 'BACKUP_CREATE',
+        resource: 'backup',
+        resourceId: id,
+        status: 'FAILED',
+        metadata: { slug: inst.slug, kind, error: errorMessage(err).slice(0, 1000) },
+      });
       throw err;
     } finally {
       await fs.rm(work, { recursive: true, force: true });
@@ -149,7 +157,7 @@ export class BackupService {
     }
   }
 
-  async restore(backup: BackupRow, inst: InstanceRow, actor: string): Promise<{ safety_backup_id: string }> {
+  async restore(backup: BackupRow, inst: InstanceRow, actor: ActorRef): Promise<{ safety_backup_id: string }> {
     const file = path.join(this.d.backupsDir, backup.filename);
     if ((await sha256File(file)) !== backup.sha256) {
       throw new HttpError(409, 'backup_corrupted', 'Backup checksum does not match; refusing to restore.');
@@ -208,7 +216,7 @@ export class BackupService {
     }
   }
 
-  async remove(id: string, actor: string): Promise<void> {
+  async remove(id: string, actor: ActorRef): Promise<void> {
     const backup = this.get(id);
     await fs.rm(path.join(this.d.backupsDir, backup.filename), { force: true });
     this.d.db.prepare('DELETE FROM backups WHERE id = ?').run(id);

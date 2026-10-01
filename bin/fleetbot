@@ -37,35 +37,51 @@ healthy() {
 build() {
   (
     cd "$APP_DIR"
-    npm install --no-audit --no-fund --loglevel=error
+    npm ci --no-audit --no-fund --loglevel=error
     npm run build --silent
     npm prune --omit=dev --no-audit --no-fund --loglevel=error
   )
 }
 
+# Copies the SQLite database together with its WAL, so committed-but-not-checkpointed
+# writes survive (the service may have crashed instead of shutting down cleanly).
+copy_db() {
+  local from="$1" to="$2" ext
+  for ext in "" -wal -shm; do
+    rm -f "$to$ext"
+    if [[ -f "$from$ext" ]]; then install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$from$ext" "$to$ext"; fi
+  done
+}
+
 cmd_update() {
-  local prev snapshot
+  local prev snapshot ref
+  ref="$(cat /etc/fleetbot/ref 2>/dev/null || echo main)"
+  [[ $ref =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || { echo "Invalid ref in /etc/fleetbot/ref" >&2; exit 1; }
   prev="$(git -C "$APP_DIR" rev-parse HEAD)"
   snapshot="$FLEET_DIR/backups/control-plane-$(date -u +%Y%m%dT%H%M%SZ).db"
 
   echo "Stopping service and snapshotting the control-plane database..."
   systemctl stop fleetbot.service
-  install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$DATA_DIR/fleetbot.db" "$snapshot"
+  copy_db "$DATA_DIR/fleetbot.db" "$snapshot"
 
   rollback() {
     echo "Update failed: rolling back to ${prev:0:12}" >&2
     git -C "$APP_DIR" reset --quiet --hard "$prev"
     build || true
-    install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$snapshot" "$DATA_DIR/fleetbot.db"
-    rm -f "$DATA_DIR/fleetbot.db-wal" "$DATA_DIR/fleetbot.db-shm"
+    systemctl stop fleetbot.service || true
+    copy_db "$snapshot" "$DATA_DIR/fleetbot.db"
     systemctl start fleetbot.service
     exit 1
   }
 
-  git -C "$APP_DIR" fetch --quiet --depth 1 origin main || rollback
+  echo "Fetching $ref..."
+  git -C "$APP_DIR" fetch --quiet --depth 1 origin "$ref" || rollback
   git -C "$APP_DIR" reset --quiet --hard FETCH_HEAD || rollback
   build || rollback
   install -o root -g root -m 0755 "$APP_DIR/deploy/fleetbot-helper" /usr/local/sbin/fleetbot-helper
+  # This script is still running: replace it by rename so bash keeps reading the old inode.
+  install -o root -g root -m 0755 "$APP_DIR/bin/fleetbot" /usr/local/bin/fleetbot.new
+  mv -f /usr/local/bin/fleetbot.new /usr/local/bin/fleetbot
   systemctl start fleetbot.service
   healthy || rollback
   echo "Updated ${prev:0:12} -> $(git -C "$APP_DIR" rev-parse --short=12 HEAD). DB snapshot: $snapshot"

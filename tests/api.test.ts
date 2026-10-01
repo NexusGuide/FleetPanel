@@ -73,7 +73,19 @@ function request(method: string, url: string, opts: { headers?: Record<string, s
   });
 }
 
-async function login(username: string, password: string): Promise<{ cookie: string; token: string; csrf: string }> {
+type Login = { cookie: string; token: string; csrf: string };
+const logins = new Map<string, Login>();
+
+/** One session per user: the login endpoint is rate limited to 5 attempts per user and IP. */
+async function login(username: string, password: string): Promise<Login> {
+  const cached = logins.get(username);
+  if (cached) return cached;
+  const fresh = await freshLogin(username, password);
+  logins.set(username, fresh);
+  return fresh;
+}
+
+async function freshLogin(username: string, password: string): Promise<Login> {
   const res = await request('POST', '/api/auth/login', { body: { username, password } });
   expect(res.status).toBe(200);
   const setCookie = res.headers['set-cookie']?.[0] ?? '';
@@ -108,7 +120,7 @@ beforeAll(async () => {
       fs.mkdirSync(dest, { recursive: true });
     },
   });
-  const app = createApp({ db, sessions: new SessionStore(db), audit, instances, backups, cookieSecure: false, trustProxy: false });
+  const app = createApp({ db, sessions: new SessionStore(db), audit, instances, backups, cookieSecure: false, trustProxy: false, dataRoot: tmp });
   server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -203,5 +215,68 @@ describe('API security', () => {
       body: { slug: 'demo-bot', provider: 'mirza', domain: 'other.example.com', bot_token: TOKEN, admin_telegram_id: '42' },
     });
     expect(duplicate.status).toBe(409);
+
+    const sameBot = await request('POST', '/api/instances', {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { slug: 'other-bot', provider: 'faoxima', domain: 'other.example.com', bot_token: TOKEN, admin_telegram_id: '42' },
+    });
+    expect(sameBot.status).toBe(409);
+    expect(sameBot.body.error).toBe('bot_in_use');
+  });
+
+  it('accepts hyphenated domains end to end', async () => {
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    telegram.getMe = async () => ({ id: 2, username: 'second_bot' });
+    const res = await request('POST', '/api/instances', {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { slug: 'shop-bot', provider: 'faoxima', domain: 'my-shop.example.com', bot_token: TOKEN, admin_telegram_id: '7' },
+    });
+    expect(res.status).toBe(202);
+    const id = res.body.instance.id as number;
+    let instance = res.body.instance;
+    for (let i = 0; i < 50 && instance.status === 'provisioning'; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      instance = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+    }
+    expect(instance.last_error).toBeNull();
+    expect(instance.status).toBe('running');
+  });
+
+  it('refuses to let an administrator disable their own account', async () => {
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    const admins = await request('GET', '/api/admins', { headers: { cookie } });
+    const self = admins.body.admins.find((a: { username: string }) => a.username === 'owner');
+    const res = await request('PATCH', `/api/admins/${self.id}`, {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { is_active: false },
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('cannot_disable_self');
+  });
+
+  it('audits failed operations with the client IP', async () => {
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    const list = await request('GET', '/api/instances', { headers: { cookie } });
+    const id = list.body.instances[0].id as number;
+    // mysqldump is not available in the test environment, so the backup fails for real.
+    const backup = await request('POST', `/api/instances/${id}/backups`, { headers: { cookie, 'x-csrf-token': csrf } });
+    expect(backup.status).toBeGreaterThanOrEqual(400);
+    const audit = await request('GET', '/api/audit-logs?limit=20', { headers: { cookie } });
+    const failed = audit.body.entries.find((e: { action: string; status: string }) => e.action === 'BACKUP_CREATE' && e.status === 'FAILED');
+    expect(failed).toBeDefined();
+    expect(failed.ip).toBe('127.0.0.1');
+    const created = audit.body.entries.find((e: { action: string }) => e.action === 'INSTANCE_CREATE');
+    expect(created.ip).toBe('127.0.0.1');
+  });
+
+  it('reports real host stats and providers', async () => {
+    const { cookie } = await login('viewer', 'Viewer-Password-1');
+    const sys = await request('GET', '/api/system', { headers: { cookie } });
+    expect(sys.status).toBe(200);
+    expect(sys.body.memory.total_bytes).toBeGreaterThan(0);
+    expect(sys.body.instances.running).toBeGreaterThanOrEqual(1);
+    const providers = await request('GET', '/api/system/providers', { headers: { cookie } });
+    expect(providers.body.providers.map((p: { id: string }) => p.id)).toEqual(['mirza', 'faoxima']);
+    expect((await request('GET', '/api/system')).status).toBe(401);
   });
 });

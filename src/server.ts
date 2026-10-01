@@ -46,7 +46,17 @@ function main(): void {
   const admins = (db.prepare('SELECT COUNT(*) AS n FROM admins').get() as { n: number }).n;
   if (admins === 0) log.warn('No administrators exist yet. Create one with: sudo fleetbot create-admin <username>');
 
-  const app = createApp({ db, sessions, audit, instances, backups, cookieSecure: config.cookieSecure, trustProxy: config.trustProxy });
+  const app = createApp({
+    db,
+    sessions,
+    audit,
+    instances,
+    backups,
+    cookieSecure: config.cookieSecure,
+    trustProxy: config.trustProxy,
+    dataRoot: config.root,
+    webDir: config.webDir,
+  });
   setInterval(() => sessions.purgeExpired(), 10 * 60_000).unref();
 
   const server = app.listen(config.port, config.host, () => {

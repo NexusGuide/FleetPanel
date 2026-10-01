@@ -4,7 +4,22 @@ A small, security-first control plane for hosting multiple Telegram bots (MirzaB
 on one Ubuntu/Debian server. Each bot gets its own Linux user, php-fpm pool, MySQL database,
 nginx vhost and Let's Encrypt certificate.
 
-> **Status: v0.1, API only.** The REST API, installer and CLI are functional. The web UI is the next milestone.
+> **Status: v0.2.** Web panel, REST API, installer and CLI are functional.
+
+## Web panel
+
+Open the panel URL the installer prints and sign in with the Owner account it created. The panel shows
+only real data from this server:
+
+- **Dashboard**: instance counts, server CPU load, memory and disk, recent activity
+- **Instances**: create (guided wizard), start, stop, back up, reprovision after a failure, delete
+  (with a pre-delete backup), and the real `last_error` when an install fails
+- **Backups**: list, restore (a safety backup is taken first), delete
+- **Administrators** (Owner only): create accounts, change roles, disable access
+- **Audit log**: every sign-in, change and denied request, including failures and client IP
+- **My account**: change password, see and sign out your sessions
+
+Buttons a role is not allowed to use are hidden; the server enforces the same rules on every request.
 
 ## Install
 
@@ -14,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/NexusGuide/Fleetbot/main/install.sh
 
 The installer:
 
-- installs nginx, MariaDB (unless MySQL/MariaDB already exists), PHP-FPM, certbot and Node.js 20
+- installs nginx, MariaDB (unless MySQL/MariaDB already exists), PHP-FPM, certbot and Node.js 20 (>= 20.19)
 - creates an unprivileged `fleetbot` service user and a single allowlisted root helper
 - creates the first **Owner** account with a random password that is printed once
 - adds only its own files; it never deletes or edits existing nginx sites, databases or certificates
@@ -30,6 +45,7 @@ sudo fleetbot logs 200
 sudo fleetbot create-admin alice --role Manager
 sudo fleetbot reset-password alice
 sudo fleetbot update      # snapshots the DB, rebuilds, rolls back on a failed health check
+                          # (follows the branch/tag you installed from, FLEETBOT_REF)
 ```
 
 ## API overview
@@ -49,7 +65,9 @@ All writes need the session cookie plus the `X-CSRF-Token` returned by `/api/aut
 | GET / POST | `/api/instances/:id/backups` | `backups.read` / `backups.create` |
 | POST | `/api/backups/:id/restore` | `backups.restore` |
 | GET / POST / PATCH | `/api/admins[/:id]` | `admins.manage` (Owner) |
-| GET | `/api/audit-logs` | `audit.read` |
+| DELETE | `/api/backups/:id` | `backups.restore` |
+| GET | `/api/audit-logs?limit=&before=` | `audit.read` |
+| GET | `/api/system`, `/api/system/providers` | `instances.read` |
 
 Creating an instance:
 
@@ -76,17 +94,20 @@ because provisioning issues a certificate and registers the Telegram webhook ove
 ## Development
 
 ```bash
-npm install
+npm ci
 npm test
-npm run lint
+npm run lint        # type-checks the server and the web UI
+npm run build       # dist/server.js + dist/public (the web UI)
 ```
 
-To enable CI, move `docs/ci.yml` to `.github/workflows/ci.yml`.
+The UI lives in `web/` (React + Vite + Tailwind). For UI work run `npm run dev` (API on :3000) and
+`npm run dev:web` (Vite on :5173, proxies `/api`). The production build is served by the Fleetbot
+server itself under a strict CSP (`script-src 'self'`), so do not add inline scripts or external assets.
+
 See [SECURITY.md](SECURITY.md) for the security model.
 
 ## Roadmap
 
-- Web UI
 - Per-instance version pinning and upgrades (git tags) with automatic rollback
 - PasarGuard (Python) provider
 - Scheduled backups and off-site upload

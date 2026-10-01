@@ -57,11 +57,13 @@ fi
 apt-get update -qq
 apt-get install -y -qq "${PACKAGES[@]}" >/dev/null
 
-node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0; }
-if (( $(node_major) < 20 )); then
+# The web UI build (Vite) needs Node.js >= 20.19.
+node_ok() { node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>20||(a===20&&b>=19)?0:1)' 2>/dev/null; }
+if ! node_ok; then
   info "Installing Node.js 20 LTS"
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null
   apt-get install -y -qq nodejs >/dev/null
+  node_ok || die "Node.js >= 20.19 is required (found $(node -v 2>/dev/null || echo none))."
 fi
 
 if systemctl list-unit-files mariadb.service >/dev/null 2>&1; then
@@ -86,6 +88,8 @@ install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$FLEET_DIR/data" "$FLE
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0711 "$FLEET_DIR/instances"
 install -d -o root -g root -m 0755 /etc/fleetbot
 printf '%s\n' "$PHP_VER" > /etc/fleetbot/php-version
+# `fleetbot update` follows the same branch/tag the panel was installed from.
+printf '%s\n' "$REPO_REF" > /etc/fleetbot/ref
 
 # ---------------------------------------------------------------------------
 info "Fetching Fleetbot ($REPO_REF)"
@@ -100,7 +104,7 @@ chown -R root:root "$APP_DIR"
 info "Building (this can take a minute)"
 (
   cd "$APP_DIR"
-  npm install --no-audit --no-fund --loglevel=error
+  npm ci --no-audit --no-fund --loglevel=error
   npm run build --silent
   npm prune --omit=dev --no-audit --no-fund --loglevel=error
 )
@@ -251,7 +255,7 @@ fi
 
 echo
 echo "  Fleetbot is running."
-echo "  Panel API : $PANEL_URL/api/health"
+echo "  Panel     : $PANEL_URL"
 if [[ -n $ADMIN_PASS ]]; then
   echo "  Username  : $ADMIN_USER"
   echo "  Password  : $ADMIN_PASS"
