@@ -54,13 +54,35 @@ pool_file() { printf '/etc/php/%s/fpm/pool.d/fleetbot-%s.conf' "$2" "$1"; }
 vhost_file() { printf '%s/fleetbot-%s.conf' "$NGINX_AVAILABLE" "$1"; }
 vhost_link() { printf '%s/fleetbot-%s.conf' "$NGINX_ENABLED" "$1"; }
 
+# Validates php-fpm and nginx config. On failure CONFIG_ERROR holds the tail of the
+# tool's own output, so callers can report the real reason instead of a generic one.
+CONFIG_ERROR=""
 config_ok() {
-  "php-fpm$1" -t >/dev/null 2>&1 && nginx -t >/dev/null 2>&1
+  local out
+  if ! out="$("php-fpm$1" -t 2>&1)"; then
+    CONFIG_ERROR="php-fpm: $(printf '%s' "$out" | grep -v 'test is successful' | tail -n 3 | tr '\n' ' ')"
+    return 1
+  fi
+  if ! out="$(nginx -t 2>&1)"; then
+    CONFIG_ERROR="nginx: $(printf '%s' "$out" | grep -E 'emerg|error|failed' | tail -n 3 | tr '\n' ' ')"
+    return 1
+  fi
 }
 
 reload_services() {
   systemctl reload "php$1-fpm"
   systemctl reload nginx
+}
+
+# nginx's default server_names_hash_bucket_size (32 on many VPS CPUs) is too small
+# once several domains are hosted ("could not build server_names_hash"). Raise it
+# once, only if the admin has not set it already (setting it twice is an error).
+ensure_server_names_hash() {
+  local conf=/etc/nginx/conf.d/fleetbot.conf
+  [[ -f $conf ]] && return 0
+  if nginx -T 2>/dev/null | grep -Eq '^[[:space:]]*server_names_hash_bucket_size[[:space:]]'; then return 0; fi
+  printf '# Managed by Fleetbot: room for many/long server names\nserver_names_hash_bucket_size 128;\n' > "$conf"
+  chmod 0644 "$conf"
 }
 
 ensure_instance_user() {
@@ -77,7 +99,9 @@ require_instance_dir() {
 
 # instance-perms SLUG
 # Bot files belong to the per-instance user; the control plane gets access
-# through an ACL, nginx only gets directory traversal (no file reads).
+# through an ACL. nginx (www-data) may read files so it can serve the bot's
+# static assets (CSS, JS, images) and redirect /dir to /dir/; the vhost denies
+# secrets and data files, and config.php is additionally unreadable to it.
 cmd_instance_perms() {
   need_args $# 1
   local slug="$1" user dir
@@ -88,18 +112,29 @@ cmd_instance_perms() {
   ensure_instance_user "$user" "$dir"
   chown -R -P "$user:$user" "$dir"
   chmod -R u=rwX,g=rX,o= "$dir"
-  setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:X,d:u:$WEB_USER:X" "$dir"
+  setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:rX,d:u:$WEB_USER:rX" "$dir"
+  if [[ -f $dir/config.php && ! -L $dir/config.php ]]; then setfacl -m "u:$WEB_USER:---" "$dir/config.php"; fi
 }
 
-# instance-create SLUG DOMAIN WEBHOOK_PATH   (stdin: webhook secret)
+# instance-create SLUG DOMAIN WEBHOOK_PATH AUTH   (stdin: webhook secret)
+# AUTH is how Telegram proves a webhook call, matching what the bot itself checks:
+#   header  X-Telegram-Bot-Api-Secret-Token
+#   query   ?secret=... in the webhook URL
 cmd_instance_create() {
-  need_args $# 3
-  local slug="$1" domain="$2" hook="$3" secret user dir php pool vhost link
+  need_args $# 4
+  local slug="$1" domain="$2" hook="$3" auth="$4" secret user dir php pool vhost link guard
   check_slug "$slug"
   check_domain "$domain"
   check_hook "$hook"
   secret="$(read_stdin_value)"
   [[ $secret =~ $RE_SECRET ]] || die "invalid webhook secret"
+  case "$auth" in
+    header) guard="if (\$http_x_telegram_bot_api_secret_token != \"$secret\") { return 403; }" ;;
+    # The secret is in the URL: keep it out of the access log.
+    query) guard="if (\$arg_secret != \"$secret\") { return 403; }
+        access_log off;" ;;
+    *) die "invalid webhook auth mode" ;;
+  esac
 
   user="$(instance_user "$slug")"
   dir="$(instance_dir "$slug")"
@@ -109,6 +144,7 @@ cmd_instance_create() {
   link="$(vhost_link "$slug")"
   require_instance_dir "$dir"
   ensure_instance_user "$user" "$dir"
+  ensure_server_names_hash
 
   cat > "$pool" <<EOF
 ; Managed by Fleetbot. Instance: $slug
@@ -142,14 +178,15 @@ server {
     access_log /var/log/nginx/fleetbot-$slug.access.log;
     error_log /var/log/nginx/fleetbot-$slug.error.log;
 
-    # Never serve dotfiles, dumps, logs, configs or dependencies
+    # Never serve dotfiles, dumps, logs, data files, configs or dependencies
     location ~ /\.(?!well-known/) { deny all; }
-    location ~* \.(sql|log|ini|env|bak|sh|lock|md)\$ { deny all; }
-    location ~ ^/(config\.php|config/|vendor/) { deny all; }
+    location ~* \.(sql|log|ini|env|bak|sh|lock|md|json)\$ { deny all; }
+    location ~ (^|/)error_log\$ { deny all; }
+    location ~ ^/(config\.php|config/|vendor/|db/|logs/) { deny all; }
 
-    # Telegram webhook: only requests carrying our secret token reach PHP
+    # Telegram webhook: only requests carrying our secret reach PHP
     location = /$hook {
-        if (\$http_x_telegram_bot_api_secret_token != "$secret") { return 403; }
+        $guard
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/fleetbot-$slug.sock;
     }
@@ -166,7 +203,7 @@ EOF
   ln -sfn "$vhost" "$link"
   if ! config_ok "$php"; then
     rm -f "$pool" "$vhost" "$link"
-    die "generated configuration failed validation; nothing was enabled"
+    die "generated configuration failed validation; nothing was enabled. ${CONFIG_ERROR}"
   fi
   reload_services "$php"
 }
@@ -186,7 +223,7 @@ cmd_instance_enable() {
   ln -sfn "$vhost" "$link"
   if ! config_ok "$php"; then
     rm -f "$link"
-    die "configuration test failed; instance left disabled"
+    die "configuration test failed; instance left disabled. ${CONFIG_ERROR}"
   fi
   reload_services "$php"
 }
@@ -200,7 +237,7 @@ cmd_instance_disable() {
   pool="$(pool_file "$slug" "$php")"
   rm -f "$(vhost_link "$slug")"
   if [[ -f $pool ]]; then mv -f "$pool" "$pool.disabled"; fi
-  config_ok "$php" || die "configuration test failed after disabling"
+  config_ok "$php" || die "configuration test failed after disabling. ${CONFIG_ERROR}"
   reload_services "$php"
 }
 

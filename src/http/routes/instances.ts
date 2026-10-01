@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { AppDeps } from '../deps.js';
 import { requirePermission } from '../middleware.js';
 import { rateLimit } from '../rateLimit.js';
-import { ah, authOf, intParam } from '../util.js';
+import { actorOf, ah, intParam } from '../util.js';
 import { createInstanceSchema } from '../../security/validation.js';
 
 export function instanceRoutes(d: AppDeps): Router {
@@ -19,7 +19,7 @@ export function instanceRoutes(d: AppDeps): Router {
     sensitive,
     ah(async (req, res) => {
       const input = createInstanceSchema.parse(req.body);
-      const instance = await d.instances.create(input, authOf(req).username);
+      const instance = await d.instances.create(input, actorOf(req));
       res.status(202).json({ instance });
     }),
   );
@@ -32,7 +32,7 @@ export function instanceRoutes(d: AppDeps): Router {
     '/:id/start',
     requirePermission('instances.control', d.audit),
     ah(async (req, res) => {
-      res.json({ instance: await d.instances.start(intParam(req, 'id'), authOf(req).username) });
+      res.json({ instance: await d.instances.start(intParam(req, 'id'), actorOf(req)) });
     }),
   );
 
@@ -40,12 +40,12 @@ export function instanceRoutes(d: AppDeps): Router {
     '/:id/stop',
     requirePermission('instances.control', d.audit),
     ah(async (req, res) => {
-      res.json({ instance: await d.instances.stop(intParam(req, 'id'), authOf(req).username) });
+      res.json({ instance: await d.instances.stop(intParam(req, 'id'), actorOf(req)) });
     }),
   );
 
   r.post('/:id/reprovision', requirePermission('instances.create', d.audit), sensitive, (req, res) => {
-    res.status(202).json({ instance: d.instances.reprovision(intParam(req, 'id'), authOf(req).username) });
+    res.status(202).json({ instance: d.instances.reprovision(intParam(req, 'id'), actorOf(req)) });
   });
 
   r.delete(
@@ -53,7 +53,7 @@ export function instanceRoutes(d: AppDeps): Router {
     requirePermission('instances.delete', d.audit),
     sensitive,
     ah(async (req, res) => {
-      await d.instances.remove(intParam(req, 'id'), authOf(req).username, req.query.backup !== 'false');
+      await d.instances.remove(intParam(req, 'id'), actorOf(req), req.query.backup !== 'false');
       res.json({ ok: true });
     }),
   );
@@ -69,7 +69,7 @@ export function instanceRoutes(d: AppDeps): Router {
     requirePermission('backups.create', d.audit),
     sensitive,
     ah(async (req, res) => {
-      res.status(201).json({ backup: await d.instances.backup(intParam(req, 'id'), authOf(req).username) });
+      res.status(201).json({ backup: await d.instances.backup(intParam(req, 'id'), actorOf(req)) });
     }),
   );
 

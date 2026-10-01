@@ -1,15 +1,36 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { config } from './config.js';
 import { openDb, type DB } from './db.js';
 import { AuditLog } from './audit.js';
+import { SecretStore } from './secrets.js';
+import { SecretBox } from './security/crypto.js';
 import { hashPassword, passwordPolicyErrors } from './security/passwords.js';
 import { ROLES, isRole } from './security/rbac.js';
-import { USERNAME_RE } from './security/validation.js';
+import { SLUG_RE, USERNAME_RE } from './security/validation.js';
+import { BACKUP_ID_RE, BackupService } from './services/backups.js';
+import { InstanceService, type InstanceRow } from './services/instances.js';
+import { TelegramApi } from './services/telegram.js';
+import { SudoHelper } from './system/helper.js';
+import { gitClone } from './system/git.js';
+import { systemToolchain } from './system/toolchain.js';
+import { run } from './system/exec.js';
+import { errorMessage } from './errors.js';
 
+// Run by bin/fleetbot as the fleetbot service user (never as root).
 const USAGE = `Usage: node dist/cli.js <command>
 
   has-admins                         exit 0 if at least one administrator exists
   list-admins                        list administrators
   create-admin <username> [--role R] create an administrator (default role: Owner)
   reset-password <username>          set a new password and revoke all sessions
+  list-instances [--tsv]             list bot instances
+  list-backups [slug]                list instance backups
+  backup-instance <slug>             back up one instance (files + database)
+  restore-instance <backup-id>       restore an instance backup (a safety backup is taken first)
+  backup-control-plane <dir>         archive the control-plane database and master key into <dir>
+  delete-webhooks                    unregister every instance's Telegram webhook
 
 Passwords are read from stdin (one line) or prompted for on a terminal.
 `;
@@ -73,6 +94,42 @@ function withDb<T>(fn: (db: DB) => T): T {
   }
 }
 
+/** The same services the server uses, for commands that touch instances. */
+function services(db: DB) {
+  const audit = new AuditLog(db);
+  const secrets = new SecretStore(db, SecretBox.fromFile(config.masterKeyFile));
+  const ops = new SudoHelper(config.helperPath);
+  const backups = new BackupService({
+    db,
+    audit,
+    secrets,
+    ops,
+    instancesDir: config.instancesDir,
+    backupsDir: config.backupsDir,
+    retention: config.backupRetention,
+  });
+  const instances = new InstanceService({
+    db,
+    audit,
+    secrets,
+    ops,
+    telegram: new TelegramApi(),
+    backups,
+    git: gitClone,
+    tools: systemToolchain,
+    instancesDir: config.instancesDir,
+  });
+  return { audit, secrets, backups, instances };
+}
+
+function listInstances(db: DB): InstanceRow[] {
+  return db.prepare('SELECT * FROM instances ORDER BY slug').all() as InstanceRow[];
+}
+
+function formatSize(bytes: number): string {
+  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
+}
+
 async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
   switch (command) {
@@ -118,10 +175,116 @@ async function main(argv: string[]): Promise<void> {
       console.log(`Password updated for '${username}'; all of their sessions were revoked.`);
       return;
     }
+    case 'list-instances': {
+      const rows = withDb(listInstances);
+      if (rest.includes('--tsv')) {
+        // slug, provider, domain, status, db_name, db_user (consumed by bin/fleetbot)
+        for (const r of rows) console.log([r.slug, r.provider, r.domain, r.status, r.db_name, r.db_user].join('\t'));
+        return;
+      }
+      if (rows.length === 0) {
+        console.log('No instances.');
+        return;
+      }
+      console.table(
+        rows.map((r) => ({
+          slug: r.slug,
+          provider: r.provider,
+          domain: r.domain,
+          bot: r.bot_username ? `@${r.bot_username}` : '',
+          status: r.status,
+          error: r.last_error ? r.last_error.slice(0, 60) : '',
+        })),
+      );
+      return;
+    }
+    case 'list-backups': {
+      const slug = rest[0];
+      const rows = withDb((db) => {
+        const all = services(db).backups.list();
+        return slug ? all.filter((b) => b.slug === slug) : all;
+      });
+      if (rows.length === 0) {
+        console.log('No instance backups.');
+        return;
+      }
+      console.table(rows.map((b) => ({ id: b.id, slug: b.slug, kind: b.kind, size: formatSize(b.size_bytes), created: b.created_at })));
+      return;
+    }
+    case 'backup-instance': {
+      const slug = rest[0] ?? '';
+      if (!SLUG_RE.test(slug)) fail('usage: backup-instance <slug>', 2);
+      const db = openDb();
+      try {
+        const { instances } = services(db);
+        const inst = listInstances(db).find((i) => i.slug === slug);
+        if (!inst) fail(`instance '${slug}' not found`);
+        const backup = await instances.backup(inst.id, 'cli');
+        console.log(`Backup ${backup.id} (${formatSize(backup.size_bytes)}) -> ${path.join(config.backupsDir, backup.filename)}`);
+      } finally {
+        db.close();
+      }
+      return;
+    }
+    case 'restore-instance': {
+      const id = rest[0] ?? '';
+      if (!BACKUP_ID_RE.test(id)) fail('usage: restore-instance <backup-id> (see: fleetbot backups)', 2);
+      const db = openDb();
+      try {
+        const result = await services(db).instances.restore(id, 'cli');
+        console.log(`Restored ${id}. A safety backup of the previous state was taken: ${result.safety_backup_id}`);
+      } finally {
+        db.close();
+      }
+      return;
+    }
+    case 'backup-control-plane': {
+      const destDir = rest[0];
+      if (!destDir) fail('usage: backup-control-plane <dir>', 2);
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+      const dest = path.join(destDir, `control-plane-${stamp}.tar.gz`);
+      const work = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetbot-cp-'));
+      const db = openDb();
+      try {
+        // The SQLite online backup API gives a consistent copy even while the panel is writing.
+        await db.backup(path.join(work, 'fleetbot.db'));
+        fs.copyFileSync(config.masterKeyFile, path.join(work, 'master.key'));
+        fs.writeFileSync(
+          path.join(work, 'manifest.json'),
+          JSON.stringify({ format: 1, kind: 'control-plane', created_at: new Date().toISOString() }, null, 2),
+        );
+        await run('tar', ['-czf', dest, '-C', work, 'fleetbot.db', 'master.key', 'manifest.json']);
+        fs.chmodSync(dest, 0o600);
+        new AuditLog(db).write({ actor: 'cli', action: 'CONTROL_PLANE_BACKUP', resource: 'control-plane', resourceId: path.basename(dest), status: 'SUCCESS' });
+      } finally {
+        db.close();
+        fs.rmSync(work, { recursive: true, force: true });
+      }
+      console.log(dest);
+      return;
+    }
+    case 'delete-webhooks': {
+      const db = openDb();
+      try {
+        const { secrets } = services(db);
+        const telegram = new TelegramApi();
+        for (const inst of listInstances(db)) {
+          try {
+            await telegram.deleteWebhook(secrets.get(inst.id, 'bot_token'));
+            console.log(`${inst.slug}: webhook removed`);
+          } catch (err) {
+            console.log(`${inst.slug}: could not remove webhook (${errorMessage(err)})`);
+          }
+        }
+      } finally {
+        db.close();
+      }
+      return;
+    }
     default:
       process.stdout.write(USAGE);
       process.exit(command ? 2 : 0);
   }
 }
 
-main(process.argv.slice(2)).catch((err: unknown) => fail(err instanceof Error ? err.message : String(err)));
+main(process.argv.slice(2)).catch((err: unknown) => fail(errorMessage(err)));

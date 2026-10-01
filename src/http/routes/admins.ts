@@ -62,6 +62,10 @@ export function adminRoutes(d: AppDeps): Router {
     if (id === auth.adminId && input.role !== undefined && input.role !== target.role) {
       throw new HttpError(409, 'cannot_change_own_role', 'You cannot change your own role.');
     }
+    // Disabling yourself would end your own session and could lock the panel out.
+    if (id === auth.adminId && input.is_active === false) {
+      throw new HttpError(409, 'cannot_disable_self', 'You cannot disable your own account.');
+    }
     const losesOwner = target.role === 'Owner' && target.is_active === 1 && ((input.role !== undefined && input.role !== 'Owner') || input.is_active === false);
     if (losesOwner) {
       const owners = (d.db.prepare("SELECT COUNT(*) AS n FROM admins WHERE role = 'Owner' AND is_active = 1").get() as { n: number }).n;

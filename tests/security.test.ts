@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SecretBox, generatePassword, safeEqual } from '../src/security/crypto.js';
 import { phpString } from '../src/security/php.js';
@@ -47,7 +48,12 @@ describe('phpString', () => {
 
   it('rejects control characters', () => {
     expect(() => phpString('a\nb')).toThrow();
-    expect(() => phpString('ab')).toThrow();
+    expect(() => phpString('a\u0000b')).toThrow();
+    expect(() => phpString('a\u007fb')).toThrow();
+  });
+
+  it('accepts hyphenated domains and slugs', () => {
+    expect(phpString('shop-bot.example.com')).toBe("'shop-bot.example.com'");
   });
 });
 
@@ -73,7 +79,7 @@ describe('createInstanceSchema', () => {
 
 describe('paths and identifiers', () => {
   it('keeps instance directories inside the instances root', () => {
-    expect(instanceDir('/opt/fleetbot/instances', 'demo-bot')).toBe('/opt/fleetbot/instances/demo-bot');
+    expect(instanceDir('/opt/fleetbot/instances', 'demo-bot')).toBe(path.resolve('/opt/fleetbot/instances/demo-bot'));
     expect(() => instanceDir('/opt/fleetbot/instances', '../x')).toThrow();
     expect(() => instanceDir('/opt/fleetbot/instances', 'a/b')).toThrow();
   });

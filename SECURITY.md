@@ -1,39 +1,62 @@
-# Security model
+# Security policy
 
-## Privilege separation
+## Supported versions
+
+Security fixes go to the latest release and to `main`. Update with `sudo fleetbot update`.
+
+## Reporting a vulnerability
+
+Please open a [private security advisory](https://github.com/NexusGuide/Fleetbot/security/advisories/new)
+on GitHub rather than a public issue. Include the version (`fleetbot version`), what an attacker needs
+(network access, a panel role, a shell on the server) and steps to reproduce.
+
+## Security model in brief
+
+### Privilege separation
 
 | Component | Runs as | Can do |
 | --- | --- | --- |
-| Control plane (`dist/server.js`) | `fleetbot` | Read/write its own data, instance files (via ACL), backups |
-| `fleetbot-helper` | root (via one sudoers rule) | Only the allowlisted commands below, with validated arguments |
-| Each bot (php-fpm pool) | `fb-<slug>` | Its own directory only (`open_basedir`) |
+| Control plane (`dist/server.js`) | `fleetbot` | Its own data, instance files (via ACL), backups |
+| `fleetbot-helper` | root (via one sudoers rule) | Only the allowlisted commands below, with re-validated arguments |
+| Each bot (PHP-FPM pool) | `fb-<slug>` | Its own directory only (`open_basedir`) |
+| nginx | `www-data` | Reads bot files to serve static assets; `config.php` is unreadable to it |
 
 Helper commands: `instance-create`, `instance-perms`, `instance-enable`, `instance-disable`,
 `instance-remove`, `db-create`, `db-drop`, `cert-issue`. Every argument is re-validated as root.
 Secrets are passed on stdin, never argv.
 
-## Controls
+### Controls
 
-- **No default credentials.** The first Owner is created by the installer with a random password shown once.
-- **Passwords:** Argon2id (64 MiB, t=3, p=4); unknown usernames take the same time as wrong passwords.
-- **Sessions:** stored in SQLite as SHA-256 hashes; `HttpOnly`, `SameSite=Strict`, `Secure` when served over TLS;
-  2h idle / 24h absolute expiry. Users can only list and revoke their own sessions, by an opaque public id.
-- **CSRF:** per-session token required in `X-CSRF-Token` on every authenticated write, plus an Origin check.
+- **No default credentials.** The first Owner gets a random password, shown once.
+- **Passwords:** Argon2id (64 MiB, t=3, p=4); unknown usernames take as long as wrong passwords.
+- **Sessions:** stored as SHA-256 hashes; `HttpOnly`, `SameSite=Strict`, `Secure` over TLS; 2 h idle /
+  24 h absolute. Users can only list and revoke their own sessions.
+- **CSRF:** per-session token on every authenticated write, plus an `Origin` check.
 - **Rate limiting:** keyed on the real client IP (`trust proxy` = loopback only).
-- **Secrets at rest:** AES-256-GCM with per-record AAD. The server refuses to start if the master key
-  is missing or readable by group/others. Decryption failures throw; they never fall back to ciphertext.
-- **Injection:** strict allowlist validation of slug, domain, token and ids; generated PHP uses escaped
+- **Secrets at rest:** AES-256-GCM with per-record AAD. The server refuses to start if the master key is
+  missing or readable by group/others. Decryption failures throw; they never fall back to ciphertext.
+- **Injection:** allowlist validation of slugs, domains, tokens and ids; generated PHP uses escaped
   single-quoted literals; no shell is ever invoked (`execFile` with argument arrays only).
-- **Telegram webhooks:** nginx rejects webhook requests without the per-instance secret token.
-- **Audit log:** append-only (UPDATE/DELETE blocked by SQLite triggers).
-- **Headers:** strict CSP, `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `no-referrer`.
+- **Telegram webhooks:** nginx rejects webhook calls without the instance's secret.
+- **Web installers** of the bot projects are deleted before a site goes live.
+- **Audit log:** append-only (UPDATE/DELETE blocked by SQLite triggers), including failures and client IP.
+- **Headers:** strict CSP (`script-src 'self'`), `frame-ancestors 'none'`, `X-Frame-Options: DENY`,
+  `no-referrer`, HSTS over TLS.
+
+Implementation details: [docs/security.md](docs/security.md).
+
+## Operator responsibilities
+
+- Use a panel domain with TLS. Plain HTTP (IP mode) is for testing only.
+- Back up the control plane (`sudo fleetbot backup`) and keep the file **off** the server: it contains
+  the master key, so treat it like a password.
+- Change the initial administrator password after the first sign-in.
+- Keep the OS updated (unattended-upgrades) and run `sudo fleetbot doctor` after changes.
 
 ## Known limitations
 
 - Rate-limit counters are in memory and reset on restart.
-- Provider config templates follow each upstream project's installer; verify them when upgrading a provider.
+- Provider config templates follow each upstream project; Fleetbot fails provisioning loudly if they change.
+- The bots themselves (MirzaBot, Faoxima) are third-party code: Fleetbot isolates them from each other and
+  from the panel, but cannot fix vulnerabilities inside them.
 - Restoring a backup into a *deleted* instance is not supported yet.
-
-## Reporting a vulnerability
-
-Please open a private security advisory on GitHub rather than a public issue.

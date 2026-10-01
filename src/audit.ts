@@ -2,8 +2,15 @@ import type Database from 'better-sqlite3';
 import type { DB } from './db.js';
 import { maskSecrets } from './security/mask.js';
 
+/** Who performed an action. Services receive this from the HTTP layer so the audit log keeps the client IP. */
+export interface Actor {
+  name: string;
+  ip?: string | null;
+}
+export type ActorRef = string | Actor;
+
 export interface AuditEntry {
-  actor: string;
+  actor: ActorRef;
   action: string;
   resource: string;
   resourceId?: string | number | null;
@@ -35,12 +42,13 @@ export class AuditLog {
   }
 
   write(entry: AuditEntry): void {
+    const actor = typeof entry.actor === 'string' ? { name: entry.actor, ip: null } : entry.actor;
     this.insert.run(
-      entry.actor,
+      actor.name,
       entry.action,
       entry.resource,
       entry.resourceId === undefined || entry.resourceId === null ? null : String(entry.resourceId),
-      entry.ip ?? null,
+      entry.ip ?? actor.ip ?? null,
       entry.status,
       entry.metadata ? maskSecrets(JSON.stringify(entry.metadata)) : null,
     );

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function env(name: string, fallback: string): string {
   const value = process.env[name];
@@ -20,6 +21,8 @@ export const config = {
   backupsDir: env('BACKUPS_DIR', path.join(root, 'backups')),
   masterKeyFile: env('MASTER_KEY_FILE', path.join(root, 'config', 'master.key')),
   helperPath: env('HELPER_PATH', '/usr/local/sbin/fleetbot-helper'),
+  // Vite builds the UI into dist/public, next to the compiled server.
+  webDir: env('WEB_DIR', path.join(path.dirname(fileURLToPath(import.meta.url)), 'public')),
   // The panel is always published through nginx; never bind to a public interface.
   host: env('HOST', '127.0.0.1'),
   port: Number.parseInt(env('PORT', '3000'), 10),

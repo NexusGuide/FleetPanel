@@ -7,6 +7,7 @@ import { SessionStore } from './http/sessions.js';
 import { createApp } from './http/app.js';
 import { SudoHelper } from './system/helper.js';
 import { gitClone } from './system/git.js';
+import { systemToolchain } from './system/toolchain.js';
 import { TelegramApi } from './services/telegram.js';
 import { BackupService } from './services/backups.js';
 import { InstanceService } from './services/instances.js';
@@ -39,6 +40,7 @@ function main(): void {
     telegram: new TelegramApi(),
     backups,
     git: gitClone,
+    tools: systemToolchain,
     instancesDir: config.instancesDir,
   });
   instances.recoverInterrupted();
@@ -46,7 +48,17 @@ function main(): void {
   const admins = (db.prepare('SELECT COUNT(*) AS n FROM admins').get() as { n: number }).n;
   if (admins === 0) log.warn('No administrators exist yet. Create one with: sudo fleetbot create-admin <username>');
 
-  const app = createApp({ db, sessions, audit, instances, backups, cookieSecure: config.cookieSecure, trustProxy: config.trustProxy });
+  const app = createApp({
+    db,
+    sessions,
+    audit,
+    instances,
+    backups,
+    cookieSecure: config.cookieSecure,
+    trustProxy: config.trustProxy,
+    dataRoot: config.root,
+    webDir: config.webDir,
+  });
   setInterval(() => sessions.purgeExpired(), 10 * 60_000).unref();
 
   const server = app.listen(config.port, config.host, () => {

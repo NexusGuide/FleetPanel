@@ -2,7 +2,7 @@ import { Router, type Request } from 'express';
 import type { AppDeps } from '../deps.js';
 import { requirePermission } from '../middleware.js';
 import { rateLimit } from '../rateLimit.js';
-import { ah, authOf } from '../util.js';
+import { actorOf, ah } from '../util.js';
 import { HttpError } from '../../errors.js';
 import { BACKUP_ID_RE } from '../../services/backups.js';
 
@@ -25,7 +25,7 @@ export function backupRoutes(d: AppDeps): Router {
     requirePermission('backups.restore', d.audit),
     sensitive,
     ah(async (req, res) => {
-      res.json(await d.instances.restore(backupId(req), authOf(req).username));
+      res.json(await d.instances.restore(backupId(req), actorOf(req)));
     }),
   );
 
@@ -34,7 +34,7 @@ export function backupRoutes(d: AppDeps): Router {
     requirePermission('backups.restore', d.audit),
     sensitive,
     ah(async (req, res) => {
-      await d.backups.remove(backupId(req), authOf(req).username);
+      await d.backups.remove(backupId(req), actorOf(req));
       res.json({ ok: true });
     }),
   );

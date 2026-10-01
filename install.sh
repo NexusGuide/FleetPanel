@@ -47,8 +47,8 @@ esac
 info "Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 PACKAGES=(ca-certificates curl git acl sudo openssl nginx certbot python3-certbot-nginx
-          php-fpm php-cli php-mysql php-curl php-mbstring php-xml php-zip php-gd
-          build-essential python3)
+          php-fpm php-cli php-mysql php-curl php-mbstring php-xml php-zip php-gd php-intl php-bcmath
+          composer unzip build-essential python3)
 if command -v mysqld >/dev/null 2>&1 || command -v mariadbd >/dev/null 2>&1; then
   info "Existing MySQL/MariaDB server found: reusing it (existing databases are not touched)"
 else
@@ -57,11 +57,13 @@ fi
 apt-get update -qq
 apt-get install -y -qq "${PACKAGES[@]}" >/dev/null
 
-node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0; }
-if (( $(node_major) < 20 )); then
+# The web UI build (Vite) needs Node.js >= 20.19.
+node_ok() { node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>20||(a===20&&b>=19)?0:1)' 2>/dev/null; }
+if ! node_ok; then
   info "Installing Node.js 20 LTS"
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null
   apt-get install -y -qq nodejs >/dev/null
+  node_ok || die "Node.js >= 20.19 is required (found $(node -v 2>/dev/null || echo none))."
 fi
 
 if systemctl list-unit-files mariadb.service >/dev/null 2>&1; then
@@ -74,6 +76,9 @@ mysqladmin --protocol=socket -u root ping >/dev/null 2>&1 \
 
 PHP_VER="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
 [[ $PHP_VER =~ ^[0-9]\.[0-9]$ ]] || die "Could not detect the PHP version."
+if ! php -r 'exit(PHP_VERSION_ID >= 80200 ? 0 : 1);'; then
+  warn "PHP $PHP_VER is installed, but MirzaBot and Faoxima need PHP >= 8.2 (Ubuntu 24.04+ / Debian 12+ ship it). The panel installs, but bots will fail to provision."
+fi
 systemctl enable --now "php${PHP_VER}-fpm" >/dev/null
 
 # ---------------------------------------------------------------------------
@@ -86,6 +91,8 @@ install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$FLEET_DIR/data" "$FLE
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0711 "$FLEET_DIR/instances"
 install -d -o root -g root -m 0755 /etc/fleetbot
 printf '%s\n' "$PHP_VER" > /etc/fleetbot/php-version
+# `fleetbot update` follows the same branch/tag the panel was installed from.
+printf '%s\n' "$REPO_REF" > /etc/fleetbot/ref
 
 # ---------------------------------------------------------------------------
 info "Fetching Fleetbot ($REPO_REF)"
@@ -100,7 +107,7 @@ chown -R root:root "$APP_DIR"
 info "Building (this can take a minute)"
 (
   cd "$APP_DIR"
-  npm install --no-audit --no-fund --loglevel=error
+  npm ci --no-audit --no-fund --loglevel=error
   npm run build --silent
   npm prune --omit=dev --no-audit --no-fund --loglevel=error
 )
@@ -165,6 +172,12 @@ else
 fi
 
 info "Configuring nginx (existing sites are left untouched)"
+# The default server_names_hash_bucket_size (32 on many VPS CPUs) breaks nginx once a few
+# domains are hosted. Raise it unless the admin already set it (a duplicate is an error).
+if [[ ! -f /etc/nginx/conf.d/fleetbot.conf ]] \
+  && ! nginx -T 2>/dev/null | grep -Eq '^[[:space:]]*server_names_hash_bucket_size[[:space:]]'; then
+  printf '# Managed by Fleetbot: room for many/long server names\nserver_names_hash_bucket_size 128;\n' > /etc/nginx/conf.d/fleetbot.conf
+fi
 cat > "$NGINX_CONF" <<EOF
 # Managed by the Fleetbot installer
 server {
@@ -251,11 +264,14 @@ fi
 
 echo
 echo "  Fleetbot is running."
-echo "  Panel API : $PANEL_URL/api/health"
+echo "  Panel     : $PANEL_URL"
 if [[ -n $ADMIN_PASS ]]; then
   echo "  Username  : $ADMIN_USER"
   echo "  Password  : $ADMIN_PASS"
   echo "  (shown once and not stored anywhere; change it with: sudo fleetbot reset-password $ADMIN_USER)"
 fi
-echo "  Status    : sudo fleetbot status"
+echo "  Manage    : sudo fleetbot          (menu; or: status, doctor, logs, update)"
+echo
+echo "  Next: back up the master key and copy the file OFF this server:"
+echo "        sudo fleetbot backup"
 echo

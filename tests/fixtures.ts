@@ -1,0 +1,73 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Toolchain } from '../src/system/toolchain.js';
+
+// Minimal stand-ins for each upstream repository: the same config template shape,
+// a composer.json without vendor/, and the web installer directory.
+export const MIRZA_CONFIG = `<?php
+$request_exec_timeout = null;
+$dbhost = '{database_url}';
+$dbname = '{database_name}';
+$usernamedb = '{username_db}';
+$passworddb = '{password_db}';
+$dsn = "mysql:host=$dbhost;dbname=$dbname;charset=utf8mb4";
+$APIKEY = '{API_KEY}';
+$adminnumber = '{admin_number}';
+$domainhosts = '{domain_name}';
+$usernamebot = '{username_bot}';
+`;
+
+export const FAOXIMA_CONFIG = `<?php
+
+if (!defined('_FX_SHARD')) {
+    define('_FX_SHARD','b08d416dac363b09');
+}
+
+$dbname     = '';
+$usernamedb = '';
+$passworddb = '';
+$dbhost     = '';
+
+$APIKEY                     = '';
+$adminnumber                = '';
+$domainhosts                = '';
+$usernamebot                = '';
+$domainhosts                = rtrim(preg_replace('#^https?://#', '', $domainhosts), '/');
+`;
+
+export async function fakeClone(url: string, _ref: string | undefined, dest: string): Promise<void> {
+  const faoxima = url.includes('Faoxima');
+  fs.mkdirSync(path.join(dest, faoxima ? 'installer' : 'install'), { recursive: true });
+  fs.writeFileSync(path.join(dest, 'config.php'), faoxima ? FAOXIMA_CONFIG : MIRZA_CONFIG);
+  fs.writeFileSync(path.join(dest, 'composer.json'), '{}');
+  fs.writeFileSync(path.join(dest, 'table.php'), '<?php');
+  if (faoxima) {
+    // Faoxima ships vendor/ in the repository.
+    fs.mkdirSync(path.join(dest, 'vendor'), { recursive: true });
+    fs.writeFileSync(path.join(dest, 'vendor', 'autoload.php'), '<?php');
+  }
+}
+
+export interface ToolCalls {
+  composer: string[];
+  php: string[];
+  sql: string[];
+}
+
+export function fakeToolchain(calls: ToolCalls = { composer: [], php: [], sql: [] }): Toolchain & { calls: ToolCalls } {
+  return {
+    calls,
+    async composerInstall(dir) {
+      calls.composer.push(dir);
+      fs.mkdirSync(path.join(dir, 'vendor'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'vendor', 'autoload.php'), '<?php');
+    },
+    async runPhp(dir, script) {
+      calls.php.push(path.join(dir, script));
+    },
+    async sql(_db, sql) {
+      calls.sql.push(sql);
+      return '1\n';
+    },
+  };
+}

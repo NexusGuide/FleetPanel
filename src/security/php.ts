@@ -6,7 +6,7 @@
  * the literal and inject code. Control characters are rejected outright.
  */
 export function phpString(value: string): string {
-  if (/[-\u001f\u007f]/.test(value)) {
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
     throw new Error('Control characters are not allowed in generated PHP config values');
   }
   return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
