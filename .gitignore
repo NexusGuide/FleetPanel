@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.db
+*.db-wal
+*.db-shm
+*.key
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
