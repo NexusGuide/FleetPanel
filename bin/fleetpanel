@@ -232,6 +232,12 @@ cmd_doctor() {
   if out="$(curl -fsS "$HEALTH_URL" 2>/dev/null)"; then pass "API answers on 127.0.0.1:3000 ($out)"; else fail "API does not answer on 127.0.0.1:3000"; fi
 
   if out="$(nginx -t 2>&1)"; then pass "nginx configuration is valid"; else fail "nginx configuration is invalid: $(printf '%s' "$out" | grep -E 'emerg|error' | tail -n 1)"; fi
+  # nginx only warns about duplicate server names, then serves the domain from whichever site sorts first.
+  local dup
+  dup="$(printf '%s' "$out" | grep -o 'conflicting server name "[^"]*"' | cut -d'"' -f2 | sort -u | tr '\n' ' ')"
+  if [[ -n $dup ]]; then
+    warn "Domains served by more than one nginx site (requests may reach the wrong one): ${dup% } — check: grep -l <domain> /etc/nginx/sites-enabled/*"
+  fi
   php="$(cat /etc/fleetpanel/php-version 2>/dev/null || true)"
   if [[ -n $php ]] && out="$("php-fpm$php" -t 2>&1)"; then pass "php-fpm $php configuration is valid"; else fail "php-fpm configuration is invalid or PHP version unknown: $(printf '%s' "$out" | tail -n 1)"; fi
 

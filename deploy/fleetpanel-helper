@@ -85,6 +85,19 @@ ensure_server_names_hash() {
   chmod 0644 "$conf"
 }
 
+# domain_used_by DOMAIN [IGNORE_FILE]: prints the first enabled nginx site (other than
+# IGNORE_FILE) whose server_name lists DOMAIN exactly. DOMAIN is pre-validated.
+domain_used_by() {
+  local domain="$1" ignore="${2:-}" f
+  for f in "$NGINX_ENABLED"/*; do
+    [[ -e $f && $f != "$ignore" ]] || continue
+    if grep -qE "^[[:space:]]*server_name([[:space:]]+[^;[:space:]]+)*[[:space:]]+${domain//./\\.}([[:space:]]|;)" "$f"; then
+      printf '%s' "$f"
+      return 0
+    fi
+  done
+}
+
 ensure_instance_user() {
   local user="$1" dir="$2"
   if ! id -u "$user" >/dev/null 2>&1; then
@@ -145,6 +158,12 @@ cmd_instance_create() {
   require_instance_dir "$dir"
   ensure_instance_user "$user" "$dir"
   ensure_server_names_hash
+
+  # Two sites with the same server_name only produce an nginx *warning*, and nginx then
+  # silently routes the domain to whichever file sorts first. Refuse instead.
+  local other
+  other="$(domain_used_by "$domain" "$(vhost_link "$slug")")"
+  [[ -z $other ]] || die "domain $domain is already served by $other; remove that site or use another domain"
 
   cat > "$pool" <<EOF
 ; Managed by FleetPanel. Instance: $slug
