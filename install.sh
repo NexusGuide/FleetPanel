@@ -172,6 +172,12 @@ else
 fi
 
 info "Configuring nginx (existing sites are left untouched)"
+# The default server_names_hash_bucket_size (32 on many VPS CPUs) breaks nginx once a few
+# domains are hosted. Raise it unless the admin already set it (a duplicate is an error).
+if [[ ! -f /etc/nginx/conf.d/fleetbot.conf ]] \
+  && ! nginx -T 2>/dev/null | grep -Eq '^[[:space:]]*server_names_hash_bucket_size[[:space:]]'; then
+  printf '# Managed by Fleetbot: room for many/long server names\nserver_names_hash_bucket_size 128;\n' > /etc/nginx/conf.d/fleetbot.conf
+fi
 cat > "$NGINX_CONF" <<EOF
 # Managed by the Fleetbot installer
 server {

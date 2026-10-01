@@ -74,6 +74,17 @@ reload_services() {
   systemctl reload nginx
 }
 
+# nginx's default server_names_hash_bucket_size (32 on many VPS CPUs) is too small
+# once several domains are hosted ("could not build server_names_hash"). Raise it
+# once, only if the admin has not set it already (setting it twice is an error).
+ensure_server_names_hash() {
+  local conf=/etc/nginx/conf.d/fleetbot.conf
+  [[ -f $conf ]] && return 0
+  if nginx -T 2>/dev/null | grep -Eq '^[[:space:]]*server_names_hash_bucket_size[[:space:]]'; then return 0; fi
+  printf '# Managed by Fleetbot: room for many/long server names\nserver_names_hash_bucket_size 128;\n' > "$conf"
+  chmod 0644 "$conf"
+}
+
 ensure_instance_user() {
   local user="$1" dir="$2"
   if ! id -u "$user" >/dev/null 2>&1; then
@@ -133,6 +144,7 @@ cmd_instance_create() {
   link="$(vhost_link "$slug")"
   require_instance_dir "$dir"
   ensure_instance_user "$user" "$dir"
+  ensure_server_names_hash
 
   cat > "$pool" <<EOF
 ; Managed by Fleetbot. Instance: $slug
