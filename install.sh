@@ -4,14 +4,17 @@
 #   curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/main/install.sh | sudo bash
 #
 # Non-interactive overrides: FLEETPANEL_DOMAIN, FLEETPANEL_ADMIN_USER, FLEETPANEL_ACME_EMAIL,
-# FLEETPANEL_PANEL_PORT (IP mode only, default 8080), FLEETPANEL_REF (git branch/tag, default main).
+# FLEETPANEL_PANEL_PORT (IP mode only, default 8080), FLEETPANEL_REF (git branch/tag; default: the
+# current update channel, else main).
 #
 # What it does NOT do: it never deletes or edits existing nginx sites, databases or
 # certificates. FleetPanel only adds its own files (fleetpanel-*.conf, fp_* databases).
 set -euo pipefail
 
 REPO_URL="${FLEETPANEL_REPO:-https://github.com/NexusGuide/FleetPanel.git}"
-REPO_REF="${FLEETPANEL_REF:-main}"
+# Re-running keeps the update channel the server already follows (e.g. a pinned release).
+REPO_REF="${FLEETPANEL_REF:-$(cat /etc/fleetpanel/ref 2>/dev/null || echo main)}"
+[[ $REPO_REF =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || REPO_REF=main
 FLEET_DIR=/opt/fleetpanel
 APP_DIR="$FLEET_DIR/app"
 SERVICE_USER=fleetpanel

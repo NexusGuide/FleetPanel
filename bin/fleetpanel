@@ -339,7 +339,9 @@ restore_control_plane() {
   safety="$(app_cli backup-control-plane "$BACKUPS_DIR")"
   echo "Safety backup of the current state: $safety"
   work="$(mktemp -d)"
-  trap 'rm -rf "$work"' RETURN
+  # The extracted copy holds the master key: remove it however this command ends (die exits).
+  RESTORE_WORK="$work"
+  trap 'rm -rf "$RESTORE_WORK"' EXIT
   tar -xzf "$file" -C "$work" --no-same-owner
   [[ "$(stat -c %s "$work/master.key")" == 32 ]] || die "the backup's master key is not 32 bytes"
 

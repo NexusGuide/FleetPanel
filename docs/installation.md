@@ -38,7 +38,7 @@ Save the printed password, sign in, then change it under **My account**.
 | `FLEETPANEL_PANEL_PORT` | Panel port in IP mode (default `8080`) |
 | `FLEETPANEL_ADMIN_USER` | First administrator's username (default `admin`) |
 | `FLEETPANEL_ACME_EMAIL` | Email for Let's Encrypt expiry notices |
-| `FLEETPANEL_REF` | Branch or tag to install (default `main`); also becomes the update channel |
+| `FLEETPANEL_REF` | Branch or tag to install; also becomes the update channel (default: the current channel on a re-run, else `main`) |
 
 Example, pinned to a release:
 
