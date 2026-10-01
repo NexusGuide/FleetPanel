@@ -21,7 +21,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | --- | --- |
 | Panel service | `fleetpanel.service` is not active |
 | API | `GET /api/health` on 127.0.0.1:3000 does not answer |
-| nginx | `nginx -t` fails (the message is shown) |
+| nginx | `nginx -t` fails (the message is shown); *warn* when a domain is served by more than one site |
 | php-fpm | `php-fpm<version> -t` fails |
 | MySQL/MariaDB | `mysqladmin ping` over the local socket fails |
 | Master key | missing, not mode 600, not owned by `fleetpanel`, or not 32 bytes |

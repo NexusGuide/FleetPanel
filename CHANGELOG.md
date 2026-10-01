@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.1
+
+### Fixed
+- Creating an instance for a domain that another nginx site already serves (for example a leftover
+  instance from an earlier install) succeeded, but nginx only warns about duplicate server names and
+  routed the bot's traffic to the other site: Telegram got 403 and the bot never answered. The helper now
+  refuses such a domain with a clear error.
+- `fleetpanel doctor` warns about domains served by more than one nginx site.
+
 ## v0.3.0
 
 ### Renamed to FleetPanel
