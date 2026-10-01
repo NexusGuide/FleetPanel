@@ -34,7 +34,7 @@ export type GitClone = (repoUrl: string, ref: string | undefined, dest: string) 
 
 export function dbIdentFor(slug: string): string {
   if (!SLUG_RE.test(slug)) throw new Error('invalid slug');
-  return `fb_${slug.replace(/-/g, '_')}`;
+  return `fp_${slug.replace(/-/g, '_')}`;
 }
 
 /** Resolves an instance directory and guarantees it is a direct child of instancesDir. */

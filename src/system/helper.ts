@@ -1,7 +1,7 @@
 import { run } from './exec.js';
 import type { WebhookAuth } from '../providers/index.js';
 
-/** Everything that needs root. Implemented by deploy/fleetbot-helper. */
+/** Everything that needs root. Implemented by deploy/fleetpanel-helper. */
 export interface PrivilegedOps {
   createDatabase(dbName: string, dbUser: string, password: string): Promise<void>;
   dropDatabase(dbName: string, dbUser: string): Promise<void>;

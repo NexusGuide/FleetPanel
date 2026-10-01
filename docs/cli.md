@@ -1,32 +1,32 @@
 # CLI reference
 
-`/usr/local/bin/fleetbot` is the operator CLI. Most commands need root (`sudo fleetbot …`). Run it
+`/usr/local/bin/fleetpanel` is the operator CLI. Most commands need root (`sudo fleetpanel …`). Run it
 without arguments for an interactive menu with the same actions.
 
-Commands that touch the database run the Node.js part of the CLI (`dist/cli.js`) as the `fleetbot` user,
+Commands that touch the database run the Node.js part of the CLI (`dist/cli.js`) as the `fleetpanel` user,
 never as root. Actions taken from the CLI are written to the audit log with the actor `cli`.
 
 ## Service
 
 | Command | Description |
 | --- | --- |
-| `fleetbot status` | Service state, health check, version, update channel and instance list. Exits non-zero if the service is not running. |
-| `fleetbot doctor` | Runs the checks below and prints `[PASS]`, `[WARN]` or `[FAIL]` for each. Exits non-zero if anything failed. |
-| `fleetbot start` / `stop` / `restart` | Controls `fleetbot.service`. Bots keep running when the panel is stopped. |
-| `fleetbot logs [N] [-f]` | The last N lines (default 100) of the panel's journal; `-f` follows. Secrets are masked before they are logged. |
+| `fleetpanel status` | Service state, health check, version, update channel and instance list. Exits non-zero if the service is not running. |
+| `fleetpanel doctor` | Runs the checks below and prints `[PASS]`, `[WARN]` or `[FAIL]` for each. Exits non-zero if anything failed. |
+| `fleetpanel start` / `stop` / `restart` | Controls `fleetpanel.service`. Bots keep running when the panel is stopped. |
+| `fleetpanel logs [N] [-f]` | The last N lines (default 100) of the panel's journal; `-f` follows. Secrets are masked before they are logged. |
 
 ### Doctor checks
 
 | Check | Fails / warns when |
 | --- | --- |
-| Panel service | `fleetbot.service` is not active |
+| Panel service | `fleetpanel.service` is not active |
 | API | `GET /api/health` on 127.0.0.1:3000 does not answer |
 | nginx | `nginx -t` fails (the message is shown) |
 | php-fpm | `php-fpm<version> -t` fails |
 | MySQL/MariaDB | `mysqladmin ping` over the local socket fails |
-| Master key | missing, not mode 600, not owned by `fleetbot`, or not 32 bytes |
-| Control-plane backup | *warn* when none exists in `/opt/fleetbot/backups` |
-| Privileged helper | helper missing or `/etc/sudoers.d/fleetbot` invalid |
+| Master key | missing, not mode 600, not owned by `fleetpanel`, or not 32 bytes |
+| Control-plane backup | *warn* when none exists in `/opt/fleetpanel/backups` |
+| Privileged helper | helper missing or `/etc/sudoers.d/fleetpanel` invalid |
 | Disk | *warn* under 2 GB free, *fail* under 512 MB |
 | Memory | *warn* under ~1 GB |
 | Node.js | older than 20.19 |
@@ -39,12 +39,12 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 
 | Command | Description |
 | --- | --- |
-| `fleetbot instances` | Lists instances with provider, domain, bot and status (and the start of `last_error`). |
-| `fleetbot backups [SLUG]` | Lists instance backups (all, or one instance) and control-plane backup files. |
-| `fleetbot backup` | **Control-plane backup:** a consistent copy of the panel database plus the master key, as `/opt/fleetbot/backups/control-plane-<time>.tar.gz` (mode 600). Copy it off the server: anyone holding it can decrypt the stored bot tokens. |
-| `fleetbot backup SLUG` | Backs up one instance: its files and a `mysqldump` of its database. Same format as backups taken in the panel. |
-| `fleetbot restore FILE.tar.gz` | Restores a control-plane backup. Asks you to type `RESTORE`, takes a safety backup of the current state, replaces the database and master key, and starts the panel; if it does not become healthy, the safety backup is put back. Bot files and databases are not touched. |
-| `fleetbot restore BACKUP_ID` | Restores an instance backup (IDs from `fleetbot backups`). A pre-restore safety backup is taken first; files are rolled back if the restore fails. |
+| `fleetpanel instances` | Lists instances with provider, domain, bot and status (and the start of `last_error`). |
+| `fleetpanel backups [SLUG]` | Lists instance backups (all, or one instance) and control-plane backup files. |
+| `fleetpanel backup` | **Control-plane backup:** a consistent copy of the panel database plus the master key, as `/opt/fleetpanel/backups/control-plane-<time>.tar.gz` (mode 600). Copy it off the server: anyone holding it can decrypt the stored bot tokens. |
+| `fleetpanel backup SLUG` | Backs up one instance: its files and a `mysqldump` of its database. Same format as backups taken in the panel. |
+| `fleetpanel restore FILE.tar.gz` | Restores a control-plane backup. Asks you to type `RESTORE`, takes a safety backup of the current state, replaces the database and master key, and starts the panel; if it does not become healthy, the safety backup is put back. Bot files and databases are not touched. |
+| `fleetpanel restore BACKUP_ID` | Restores an instance backup (IDs from `fleetpanel backups`). A pre-restore safety backup is taken first; files are rolled back if the restore fails. |
 
 Prefer the panel for instance restores while the panel is in use: the CLI and the panel do not share the
 per-instance "busy" lock.
@@ -53,24 +53,24 @@ per-instance "busy" lock.
 
 | Command | Description |
 | --- | --- |
-| `fleetbot admins` | Lists administrators. |
-| `fleetbot create-admin USER [--role ROLE]` | Creates an administrator (default role Owner). The password is prompted for, or read from stdin. |
-| `fleetbot reset-password USER` | Sets a new password and signs the user out everywhere. Use this if you are locked out. |
+| `fleetpanel admins` | Lists administrators. |
+| `fleetpanel create-admin USER [--role ROLE]` | Creates an administrator (default role Owner). The password is prompted for, or read from stdin. |
+| `fleetpanel reset-password USER` | Sets a new password and signs the user out everywhere. Use this if you are locked out. |
 
 ## Versions
 
 | Command | Description |
 | --- | --- |
-| `fleetbot version` | Installed version, commit and update channel. |
-| `fleetbot channel` | Shows the update channel and the latest released tags. |
-| `fleetbot channel REF` | Sets the channel to a branch (`main`) or a release tag (`v0.2.0`). Takes effect on the next update. |
-| `fleetbot update` | Updates to the latest commit of the channel (see below). |
+| `fleetpanel version` | Installed version, commit and update channel. |
+| `fleetpanel channel` | Shows the update channel and the latest released tags. |
+| `fleetpanel channel REF` | Sets the channel to a branch (`main`) or a release tag (`v0.3.0`). Takes effect on the next update. |
+| `fleetpanel update` | Updates to the latest commit of the channel (see below). |
 
 ### Update
 
-1. Clones the channel into `/opt/fleetbot/app.new` and builds it there while the panel keeps running.
+1. Clones the channel into `/opt/fleetpanel/app.new` and builds it there while the panel keeps running.
    If the build fails, nothing changes.
-2. Stops the panel and snapshots the database (with its WAL) to `/opt/fleetbot/backups/control-plane-<time>.db`.
+2. Stops the panel and snapshots the database (with its WAL) to `/opt/fleetpanel/backups/control-plane-<time>.db`.
 3. Moves the current build to `app.prev`, the new one to `app`, and installs the new root helper and CLI.
 4. Starts the panel and waits for its health check.
 5. On failure it moves the previous build back, restores the snapshot and keeps the failed build in
@@ -81,13 +81,13 @@ Downtime is a few seconds. Bots are not affected. Updates do not install new sys
 
 ## Uninstall
 
-`fleetbot uninstall` asks which mode to use:
+`fleetpanel uninstall` asks which mode to use:
 
 - **Standard:** takes a final control-plane backup, then removes the systemd service, the panel's nginx
-  site, the root helper and its sudoers rule, the CLI and `/opt/fleetbot/app`. Bots keep running; their
-  files, databases, `/opt/fleetbot/{data,config,backups,instances}` and `/etc/fleetbot` are kept, so a
+  site, the root helper and its sudoers rule, the CLI and `/opt/fleetpanel/app`. Bots keep running; their
+  files, databases, `/opt/fleetpanel/{data,config,backups,instances}` and `/etc/fleetpanel` are kept, so a
   later reinstall picks everything up again.
 - **Full purge:** requires typing `PERMANENTLY DELETE INSTANCES`. Additionally unregisters every bot's
   Telegram webhook, removes every instance (files, nginx site, PHP pool, Linux user) and its database,
-  deletes `/opt/fleetbot` including all backups, `/etc/fleetbot` and the `fleetbot` user. Let's Encrypt
+  deletes `/opt/fleetpanel` including all backups, `/etc/fleetpanel` and the `fleetpanel` user. Let's Encrypt
   certificates are left in `/etc/letsencrypt`.

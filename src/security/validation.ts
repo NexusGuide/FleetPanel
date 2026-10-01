@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ROLES } from './rbac.js';
 import { PROVIDER_IDS } from '../providers/index.js';
 
-// Keep these in sync with deploy/fleetbot-helper, which re-validates as root.
+// Keep these in sync with deploy/fleetpanel-helper, which re-validates as root.
 export const SLUG_RE = /^[a-z][a-z0-9-]{1,27}[a-z0-9]$/;
 export const DOMAIN_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 export const BOT_TOKEN_RE = /^\d{5,15}:[A-Za-z0-9_-]{30,64}$/;

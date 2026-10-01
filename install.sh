@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
-# Fleetbot installer (Ubuntu 22.04+/Debian 12+). Safe to re-run.
+# FleetPanel installer (Ubuntu 24.04+/Debian 12+). Safe to re-run.
 #
-#   curl -fsSL https://raw.githubusercontent.com/NexusGuide/Fleetbot/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/main/install.sh | sudo bash
 #
-# Non-interactive overrides: FLEETBOT_DOMAIN, FLEETBOT_ADMIN_USER, FLEETBOT_ACME_EMAIL,
-# FLEETBOT_PANEL_PORT (IP mode only, default 8080), FLEETBOT_REF (git branch/tag, default main).
+# Non-interactive overrides: FLEETPANEL_DOMAIN, FLEETPANEL_ADMIN_USER, FLEETPANEL_ACME_EMAIL,
+# FLEETPANEL_PANEL_PORT (IP mode only, default 8080), FLEETPANEL_REF (git branch/tag; default: the
+# current update channel, else main).
 #
 # What it does NOT do: it never deletes or edits existing nginx sites, databases or
-# certificates. Fleetbot only adds its own files (fleetbot-*.conf, fb_* databases).
+# certificates. FleetPanel only adds its own files (fleetpanel-*.conf, fp_* databases).
 set -euo pipefail
 
-REPO_URL="${FLEETBOT_REPO:-https://github.com/NexusGuide/Fleetbot.git}"
-REPO_REF="${FLEETBOT_REF:-main}"
-FLEET_DIR=/opt/fleetbot
+REPO_URL="${FLEETPANEL_REPO:-https://github.com/NexusGuide/FleetPanel.git}"
+# Re-running keeps the update channel the server already follows (e.g. a pinned release).
+REPO_REF="${FLEETPANEL_REF:-$(cat /etc/fleetpanel/ref 2>/dev/null || echo main)}"
+[[ $REPO_REF =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || REPO_REF=main
+FLEET_DIR=/opt/fleetpanel
 APP_DIR="$FLEET_DIR/app"
-SERVICE_USER=fleetbot
+SERVICE_USER=fleetpanel
 BACKEND_PORT=3000
-PANEL_PORT="${FLEETBOT_PANEL_PORT:-8080}"
+PANEL_PORT="${FLEETPANEL_PANEL_PORT:-8080}"
 DOMAIN_RE='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
 
 info() { printf '\033[0;36m==>\033[0m %s\n' "$*"; }
@@ -41,7 +44,7 @@ case "${ID:-}" in
   ubuntu|debian) ;;
   *) die "Only Ubuntu and Debian are supported (found: ${ID:-unknown})." ;;
 esac
-[[ $PANEL_PORT =~ ^[0-9]{2,5}$ ]] || die "FLEETBOT_PANEL_PORT must be a port number."
+[[ $PANEL_PORT =~ ^[0-9]{2,5}$ ]] || die "FLEETPANEL_PANEL_PORT must be a port number."
 
 # ---------------------------------------------------------------------------
 info "Installing system packages"
@@ -81,6 +84,11 @@ if ! php -r 'exit(PHP_VERSION_ID >= 80200 ? 0 : 1);'; then
 fi
 systemctl enable --now "php${PHP_VER}-fpm" >/dev/null
 
+# Offer the current panel domain as the default when re-running.
+EXISTING_DOMAIN="$(grep -hoP '^\s*server_name\s+\K[a-z0-9.-]+(?=;)' \
+  /etc/nginx/sites-available/fleetpanel-panel.conf 2>/dev/null | head -n 1 || true)"
+[[ $EXISTING_DOMAIN =~ $DOMAIN_RE ]] || EXISTING_DOMAIN=""
+
 # ---------------------------------------------------------------------------
 info "Creating service user and directories"
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
@@ -89,14 +97,15 @@ fi
 install -d -o root -g root -m 0711 "$FLEET_DIR"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$FLEET_DIR/data" "$FLEET_DIR/config" "$FLEET_DIR/backups"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0711 "$FLEET_DIR/instances"
-install -d -o root -g root -m 0755 /etc/fleetbot
-printf '%s\n' "$PHP_VER" > /etc/fleetbot/php-version
-# `fleetbot update` follows the same branch/tag the panel was installed from.
-printf '%s\n' "$REPO_REF" > /etc/fleetbot/ref
+install -d -o root -g root -m 0755 /etc/fleetpanel
+printf '%s\n' "$PHP_VER" > /etc/fleetpanel/php-version
+# `fleetpanel update` follows the same branch/tag the panel was installed from.
+printf '%s\n' "$REPO_REF" > /etc/fleetpanel/ref
 
 # ---------------------------------------------------------------------------
-info "Fetching Fleetbot ($REPO_REF)"
+info "Fetching FleetPanel ($REPO_REF)"
 if [[ -d $APP_DIR/.git ]]; then
+  git -C "$APP_DIR" remote set-url origin "$REPO_URL"   # the repository may have been renamed
   git -C "$APP_DIR" fetch --quiet --depth 1 origin "$REPO_REF"
   git -C "$APP_DIR" reset --quiet --hard FETCH_HEAD
 else
@@ -122,20 +131,20 @@ if [[ ! -s $KEY_FILE ]]; then
 fi
 
 info "Installing privileged helper and CLI"
-install -o root -g root -m 0755 "$APP_DIR/deploy/fleetbot-helper" /usr/local/sbin/fleetbot-helper
-install -o root -g root -m 0755 "$APP_DIR/bin/fleetbot" /usr/local/bin/fleetbot
+install -o root -g root -m 0755 "$APP_DIR/deploy/fleetpanel-helper" /usr/local/sbin/fleetpanel-helper
+install -o root -g root -m 0755 "$APP_DIR/bin/fleetpanel" /usr/local/bin/fleetpanel
 SUDOERS_TMP="$(mktemp)"
-printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetbot-helper\nDefaults:%s !requiretty\n' \
+printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetpanel-helper\nDefaults:%s !requiretty\n' \
   "$SERVICE_USER" "$SERVICE_USER" > "$SUDOERS_TMP"
 visudo -cf "$SUDOERS_TMP" >/dev/null || { rm -f "$SUDOERS_TMP"; die "Generated sudoers rule is invalid."; }
-install -o root -g root -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/fleetbot
+install -o root -g root -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/fleetpanel
 rm -f "$SUDOERS_TMP"
 
-ACME_EMAIL="${FLEETBOT_ACME_EMAIL:-}"
-if [[ -z $ACME_EMAIL && ! -f /etc/fleetbot/acme-email ]]; then
+ACME_EMAIL="${FLEETPANEL_ACME_EMAIL:-}"
+if [[ -z $ACME_EMAIL && ! -f /etc/fleetpanel/acme-email ]]; then
   ask ACME_EMAIL "Email for Let's Encrypt expiry notices (optional): " ""
 fi
-if [[ -n $ACME_EMAIL ]]; then printf '%s\n' "$ACME_EMAIL" > /etc/fleetbot/acme-email; fi
+if [[ -n $ACME_EMAIL ]]; then printf '%s\n' "$ACME_EMAIL" > /etc/fleetpanel/acme-email; fi
 
 # ---------------------------------------------------------------------------
 CLI=(sudo -u "$SERVICE_USER" env "FLEET_DIR=$FLEET_DIR" node "$APP_DIR/dist/cli.js")
@@ -144,23 +153,27 @@ ADMIN_PASS=""
 if "${CLI[@]}" has-admins; then
   info "An administrator already exists; not creating another one"
 else
-  ADMIN_USER="${FLEETBOT_ADMIN_USER:-}"
+  ADMIN_USER="${FLEETPANEL_ADMIN_USER:-}"
   if [[ -z $ADMIN_USER ]]; then ask ADMIN_USER "Administrator username [admin]: " "admin"; fi
   RAND="$(openssl rand -base64 30 | tr -dc 'A-Za-z0-9')"
-  ADMIN_PASS="Fb-${RAND:0:22}"
+  ADMIN_PASS="Fp-${RAND:0:22}"
   printf '%s\n' "$ADMIN_PASS" | "${CLI[@]}" create-admin "$ADMIN_USER" --role Owner >/dev/null
 fi
 
 # ---------------------------------------------------------------------------
-PANEL_DOMAIN="${FLEETBOT_DOMAIN:-}"
+PANEL_DOMAIN="${FLEETPANEL_DOMAIN:-}"
 if [[ -z $PANEL_DOMAIN ]]; then
-  ask PANEL_DOMAIN "Panel domain, e.g. panel.example.com (empty = use server IP on port $PANEL_PORT): " ""
+  if [[ -n $EXISTING_DOMAIN ]]; then
+    ask PANEL_DOMAIN "Panel domain [$EXISTING_DOMAIN]: " "$EXISTING_DOMAIN"
+  else
+    ask PANEL_DOMAIN "Panel domain, e.g. panel.example.com (empty = use server IP on port $PANEL_PORT): " ""
+  fi
 fi
 PANEL_DOMAIN="${PANEL_DOMAIN,,}"
 if [[ -n $PANEL_DOMAIN && ! $PANEL_DOMAIN =~ $DOMAIN_RE ]]; then die "Invalid domain: $PANEL_DOMAIN"; fi
 
-NGINX_CONF=/etc/nginx/sites-available/fleetbot-panel.conf
-NGINX_LINK=/etc/nginx/sites-enabled/fleetbot-panel.conf
+NGINX_CONF=/etc/nginx/sites-available/fleetpanel-panel.conf
+NGINX_LINK=/etc/nginx/sites-enabled/fleetpanel-panel.conf
 if [[ -n $PANEL_DOMAIN ]]; then
   LISTEN="listen 80;
     listen [::]:80;"
@@ -174,12 +187,12 @@ fi
 info "Configuring nginx (existing sites are left untouched)"
 # The default server_names_hash_bucket_size (32 on many VPS CPUs) breaks nginx once a few
 # domains are hosted. Raise it unless the admin already set it (a duplicate is an error).
-if [[ ! -f /etc/nginx/conf.d/fleetbot.conf ]] \
+if [[ ! -f /etc/nginx/conf.d/fleetpanel.conf ]] \
   && ! nginx -T 2>/dev/null | grep -Eq '^[[:space:]]*server_names_hash_bucket_size[[:space:]]'; then
-  printf '# Managed by Fleetbot: room for many/long server names\nserver_names_hash_bucket_size 128;\n' > /etc/nginx/conf.d/fleetbot.conf
+  printf '# Managed by FleetPanel: room for many/long server names\nserver_names_hash_bucket_size 128;\n' > /etc/nginx/conf.d/fleetpanel.conf
 fi
 cat > "$NGINX_CONF" <<EOF
-# Managed by the Fleetbot installer
+# Managed by the FleetPanel installer
 server {
     $LISTEN
     server_name $SERVER_NAME;
@@ -208,7 +221,7 @@ PANEL_URL="http://$(curl -fsS -4 --max-time 5 https://icanhazip.com 2>/dev/null 
 if [[ -n $PANEL_DOMAIN ]]; then
   PANEL_URL="http://$PANEL_DOMAIN"
   info "Requesting a Let's Encrypt certificate for $PANEL_DOMAIN"
-  if /usr/local/sbin/fleetbot-helper cert-issue "$PANEL_DOMAIN"; then
+  if /usr/local/sbin/fleetpanel-helper cert-issue "$PANEL_DOMAIN"; then
     COOKIE_SECURE=true
     PANEL_URL="https://$PANEL_DOMAIN"
   else
@@ -222,9 +235,9 @@ fi
 # ---------------------------------------------------------------------------
 info "Installing systemd service"
 NODE_BIN="$(command -v node)"
-cat > /etc/systemd/system/fleetbot.service <<EOF
+cat > /etc/systemd/system/fleetpanel.service <<EOF
 [Unit]
-Description=Fleetbot control plane
+Description=FleetPanel control plane
 After=network-online.target nginx.service mariadb.service mysql.service
 Wants=network-online.target
 
@@ -249,8 +262,8 @@ Environment=COOKIE_SECURE=$COOKIE_SECURE
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable fleetbot.service >/dev/null 2>&1
-systemctl restart fleetbot.service
+systemctl enable fleetpanel.service >/dev/null 2>&1
+systemctl restart fleetpanel.service
 
 HEALTHY=false
 for _ in $(seq 1 20); do
@@ -258,20 +271,20 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 if [[ $HEALTHY != true ]]; then
-  journalctl -u fleetbot.service -n 20 --no-pager >&2 || true
-  die "Fleetbot did not become healthy. See the log above."
+  journalctl -u fleetpanel.service -n 20 --no-pager >&2 || true
+  die "FleetPanel did not become healthy. See the log above."
 fi
 
 echo
-echo "  Fleetbot is running."
+echo "  FleetPanel is running."
 echo "  Panel     : $PANEL_URL"
 if [[ -n $ADMIN_PASS ]]; then
   echo "  Username  : $ADMIN_USER"
   echo "  Password  : $ADMIN_PASS"
-  echo "  (shown once and not stored anywhere; change it with: sudo fleetbot reset-password $ADMIN_USER)"
+  echo "  (shown once and not stored anywhere; change it with: sudo fleetpanel reset-password $ADMIN_USER)"
 fi
-echo "  Manage    : sudo fleetbot          (menu; or: status, doctor, logs, update)"
+echo "  Manage    : sudo fleetpanel          (menu; or: status, doctor, logs, update)"
 echo
 echo "  Next: back up the master key and copy the file OFF this server:"
-echo "        sudo fleetbot backup"
+echo "        sudo fleetpanel backup"
 echo

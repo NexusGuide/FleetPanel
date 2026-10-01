@@ -32,7 +32,7 @@ export function LoginPage({ notice, onLogin }: { notice: string | null; onLogin:
               <Bot className="w-7 h-7" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Fleetbot</h1>
+          <h1 className="text-2xl font-bold text-white tracking-tight">FleetPanel</h1>
           <p className="text-xs text-slate-400 mt-1">Telegram bot fleet control plane</p>
         </div>
 
@@ -76,7 +76,7 @@ export function LoginPage({ notice, onLogin }: { notice: string | null; onLogin:
           <p className="mt-5 pt-4 border-t border-slate-800 text-[11px] text-slate-500 text-center leading-relaxed">
             Forgot your password? On the server run
             <br />
-            <code className="text-slate-300 font-mono">sudo fleetbot reset-password &lt;username&gt;</code>
+            <code className="text-slate-300 font-mono">sudo fleetpanel reset-password &lt;username&gt;</code>
           </p>
         </div>
 

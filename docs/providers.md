@@ -7,7 +7,7 @@ A provider describes how to install one bot project. Providers live in `src/prov
 | `mirza` | [mahdiMGF2/mirzabot](https://github.com/mahdiMGF2/mirzabot) | `?secret=` in the URL, stored in `setting.webhook_secret` | `install/` |
 | `faoxima` | [Mmd-Amir/Faoxima](https://github.com/Mmd-Amir/Faoxima) | `X-Telegram-Bot-Api-Secret-Token` header, via `TELEGRAM_WEBHOOK_SECRET` | `installer/` |
 
-Both projects ship `config.php` as a template that their own web installer fills in. Fleetbot does the
+Both projects ship `config.php` as a template that their own web installer fills in. FleetPanel does the
 installer's work itself, so the web installer is never exposed:
 
 1. **Config:** fills the project's own `config.php` (MirzaBot: its `{placeholders}`; Faoxima: its empty
@@ -16,9 +16,9 @@ installer's work itself, so the web installer is never exposed:
 2. **Dependencies:** `composer install --no-dev` when the project has `composer.json` but no `vendor/`
    (MirzaBot does not ship `vendor/`; Faoxima does).
 3. **Schema:** runs the project's `table.php` with the PHP CLI after the database exists.
-4. **Webhook secret:** makes the bot's own check agree with Fleetbot's. MirzaBot keeps the secret in its
-   `setting` table and re-registers its webhook with `?secret=`; Fleetbot stores its secret there.
-   Faoxima reads the `TELEGRAM_WEBHOOK_SECRET` constant, which Fleetbot defines in `config.php`.
+4. **Webhook secret:** makes the bot's own check agree with FleetPanel's. MirzaBot keeps the secret in its
+   `setting` table and re-registers its webhook with `?secret=`; FleetPanel stores its secret there.
+   Faoxima reads the `TELEGRAM_WEBHOOK_SECRET` constant, which FleetPanel defines in `config.php`.
 5. **Ready check:** a query that proves the schema and setup worked (MirzaBot: the secret is stored;
    Faoxima: the admin row exists).
 6. **nginx:** the instance's site rejects webhook calls whose secret (header or query, per provider)

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Fleetbot operator CLI. Run without arguments for the interactive menu.
+# FleetPanel operator CLI. Run without arguments for the interactive menu.
 set -euo pipefail
 
-FLEET_DIR=/opt/fleetbot
+FLEET_DIR=/opt/fleetpanel
 APP_DIR="$FLEET_DIR/app"
 DATA_DIR="$FLEET_DIR/data"
 BACKUPS_DIR="$FLEET_DIR/backups"
 KEY_FILE="$FLEET_DIR/config/master.key"
-SERVICE_USER=fleetbot
-SERVICE=fleetbot.service
+SERVICE_USER=fleetpanel
+SERVICE=fleetpanel.service
 HEALTH_URL=http://127.0.0.1:3000/api/health
-HELPER=/usr/local/sbin/fleetbot-helper
-REF_FILE=/etc/fleetbot/ref
-PANEL_SITE=/etc/nginx/sites-available/fleetbot-panel.conf
-PANEL_LINK=/etc/nginx/sites-enabled/fleetbot-panel.conf
+HELPER=/usr/local/sbin/fleetpanel-helper
+REF_FILE=/etc/fleetpanel/ref
+PANEL_SITE=/etc/nginx/sites-available/fleetpanel-panel.conf
+PANEL_LINK=/etc/nginx/sites-enabled/fleetpanel-panel.conf
 REF_RE='^[A-Za-z0-9._/-]{1,100}$'
 PURGE_PHRASE='PERMANENTLY DELETE INSTANCES'
 
@@ -25,7 +25,7 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: fleetbot [command]        (no command: interactive menu)
+Usage: fleetpanel [command]        (no command: interactive menu)
 
 Service
   status                     Service state, health, version and instances
@@ -48,15 +48,15 @@ Administrators
 
 Versions
   version                    Installed version, commit and update channel
-  channel [REF]              Show or set the update channel (main, or a tag like v0.2.0)
+  channel [REF]              Show or set the update channel (main, or a tag like v0.3.0)
   update                     Build the channel's latest version and switch with rollback
 
-  uninstall                  Remove Fleetbot (bots keep running; purge mode optional)
+  uninstall                  Remove FleetPanel (bots keep running; purge mode optional)
 EOF
 }
 
 die() { printf '%s\n' "${C_BAD}error:${C_0} $*" >&2; exit 1; }
-need_root() { [[ $EUID -eq 0 ]] || die "this command needs root: sudo fleetbot $*"; }
+need_root() { [[ $EUID -eq 0 ]] || die "this command needs root: sudo fleetpanel $*"; }
 app_cli() { sudo -u "$SERVICE_USER" env "FLEET_DIR=$FLEET_DIR" node "$APP_DIR/dist/cli.js" "$@"; }
 
 healthy() {
@@ -105,10 +105,10 @@ version_lt() { [[ $1 != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head 
 
 install_system_files() {
   local dir="$1"
-  install -o root -g root -m 0755 "$dir/deploy/fleetbot-helper" "$HELPER"
+  install -o root -g root -m 0755 "$dir/deploy/fleetpanel-helper" "$HELPER"
   # This script is still running: replace it by rename so bash keeps reading the old inode.
-  install -o root -g root -m 0755 "$dir/bin/fleetbot" /usr/local/bin/fleetbot.new
-  mv -f /usr/local/bin/fleetbot.new /usr/local/bin/fleetbot
+  install -o root -g root -m 0755 "$dir/bin/fleetpanel" /usr/local/bin/fleetpanel.new
+  mv -f /usr/local/bin/fleetpanel.new /usr/local/bin/fleetpanel
 }
 
 # Copies the SQLite database together with its WAL, so committed-but-not-checkpointed
@@ -143,7 +143,7 @@ cmd_update() {
   want="$(node -p "require('$staging/package.json').version" 2>/dev/null || echo 0)"
   if version_lt "$want" "$have"; then
     echo "${C_WARN}Channel '$ref' has v$want, which is OLDER than the installed v$have.${C_0}"
-    echo "Check the channel with: sudo fleetbot channel"
+    echo "Check the channel with: sudo fleetpanel channel"
     if [[ "$(ask 'Downgrade anyway? [y/N] ')" != [Yy] ]]; then
       rm -rf "$staging"
       die "update cancelled; nothing was changed."
@@ -158,7 +158,7 @@ cmd_update() {
   snapshot="$BACKUPS_DIR/control-plane-$(date -u +%Y%m%dT%H%M%SZ).db"
   echo "Switching to the new version..."
   systemctl stop "$SERVICE"
-  copy_db "$DATA_DIR/fleetbot.db" "$snapshot"
+  copy_db "$DATA_DIR/fleetpanel.db" "$snapshot"
   rm -rf "$previous"
   mv "$APP_DIR" "$previous"
   mv "$staging" "$APP_DIR"
@@ -173,7 +173,7 @@ cmd_update() {
     mv "$APP_DIR" "$APP_DIR.failed"
     mv "$previous" "$APP_DIR"
     install_system_files "$APP_DIR"
-    copy_db "$snapshot" "$DATA_DIR/fleetbot.db"
+    copy_db "$snapshot" "$DATA_DIR/fleetpanel.db"
     systemctl start "$SERVICE"
     die "rolled back. The failed build is kept in $APP_DIR.failed for inspection."
   fi
@@ -182,9 +182,9 @@ cmd_update() {
 }
 
 cmd_version() {
-  echo "Fleetbot v$(app_version)"
+  echo "FleetPanel v$(app_version)"
   echo "Commit   : $(git -C "$APP_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
-  echo "Channel  : $(current_ref)   (change with: sudo fleetbot channel <main|vX.Y.Z>)"
+  echo "Channel  : $(current_ref)   (change with: sudo fleetpanel channel <main|vX.Y.Z>)"
 }
 
 cmd_channel() {
@@ -201,7 +201,7 @@ cmd_channel() {
   git ls-remote --exit-code "$url" "refs/heads/$ref" "refs/tags/$ref" >/dev/null 2>&1 \
     || die "'$ref' is neither a branch nor a tag of $url"
   printf '%s\n' "$ref" > "$REF_FILE"
-  echo "Update channel set to '$ref'. Run 'sudo fleetbot update' to switch now."
+  echo "Update channel set to '$ref'. Run 'sudo fleetpanel update' to switch now."
 }
 
 # ---------------------------------------------------------------------------
@@ -225,14 +225,14 @@ fail() { D_FAIL=$((D_FAIL + 1)); printf '  %s[FAIL]%s %s\n' "$C_BAD" "$C_0" "$*"
 
 cmd_doctor() {
   local php out ver free_kb total_mb mode owner size ext missing errors line
-  echo "${C_B}Fleetbot doctor${C_0} — v$(app_version), channel $(current_ref)"
+  echo "${C_B}FleetPanel doctor${C_0} — v$(app_version), channel $(current_ref)"
   echo
 
-  if systemctl is-active --quiet "$SERVICE"; then pass "Panel service is running"; else fail "Panel service is not running (sudo fleetbot start; sudo fleetbot logs)"; fi
+  if systemctl is-active --quiet "$SERVICE"; then pass "Panel service is running"; else fail "Panel service is not running (sudo fleetpanel start; sudo fleetpanel logs)"; fi
   if out="$(curl -fsS "$HEALTH_URL" 2>/dev/null)"; then pass "API answers on 127.0.0.1:3000 ($out)"; else fail "API does not answer on 127.0.0.1:3000"; fi
 
   if out="$(nginx -t 2>&1)"; then pass "nginx configuration is valid"; else fail "nginx configuration is invalid: $(printf '%s' "$out" | grep -E 'emerg|error' | tail -n 1)"; fi
-  php="$(cat /etc/fleetbot/php-version 2>/dev/null || true)"
+  php="$(cat /etc/fleetpanel/php-version 2>/dev/null || true)"
   if [[ -n $php ]] && out="$("php-fpm$php" -t 2>&1)"; then pass "php-fpm $php configuration is valid"; else fail "php-fpm configuration is invalid or PHP version unknown: $(printf '%s' "$out" | tail -n 1)"; fi
 
   if mysqladmin --protocol=socket -u root ping >/dev/null 2>&1; then pass "MySQL/MariaDB is reachable"; else fail "MySQL/MariaDB is not reachable over the local socket"; fi
@@ -250,10 +250,10 @@ cmd_doctor() {
   if ls "$BACKUPS_DIR"/control-plane-*.tar.gz >/dev/null 2>&1; then
     pass "A control-plane backup exists (copy it off the server)"
   else
-    warn "No control-plane backup yet: run 'sudo fleetbot backup' and keep the file off this server"
+    warn "No control-plane backup yet: run 'sudo fleetpanel backup' and keep the file off this server"
   fi
 
-  if [[ -x $HELPER ]] && visudo -cf /etc/sudoers.d/fleetbot >/dev/null 2>&1; then pass "Privileged helper and sudoers rule are installed"; else fail "Privileged helper or /etc/sudoers.d/fleetbot is missing or invalid"; fi
+  if [[ -x $HELPER ]] && visudo -cf /etc/sudoers.d/fleetpanel >/dev/null 2>&1; then pass "Privileged helper and sudoers rule are installed"; else fail "Privileged helper or /etc/sudoers.d/fleetpanel is missing or invalid"; fi
 
   free_kb="$(df -Pk "$FLEET_DIR" | awk 'NR==2 {print $4}')"
   if (( free_kb < 512 * 1024 )); then fail "Only $((free_kb / 1024)) MB free on $FLEET_DIR"
@@ -278,7 +278,7 @@ cmd_doctor() {
 
   if systemctl is-active --quiet certbot.timer 2>/dev/null || [[ -f /etc/cron.d/certbot ]]; then pass "Certificate auto-renewal is scheduled"; else warn "No certbot renewal timer found: certificates will expire after 90 days"; fi
 
-  if [[ -f $DATA_DIR/fleetbot.db ]]; then
+  if [[ -f $DATA_DIR/fleetpanel.db ]]; then
     errors=0
     while IFS=$'\t' read -r slug _ _ status _; do
       [[ $status == error ]] && { errors=$((errors + 1)); warn "Instance $slug is in the error state (see the panel for the reason)"; }
@@ -286,7 +286,7 @@ cmd_doctor() {
     line="$(app_cli list-instances --tsv 2>/dev/null | wc -l || echo 0)"
     (( errors == 0 )) && pass "$line instance(s), none in the error state"
   else
-    fail "Control-plane database $DATA_DIR/fleetbot.db is missing"
+    fail "Control-plane database $DATA_DIR/fleetpanel.db is missing"
   fi
 
   echo
@@ -299,7 +299,7 @@ cmd_logs() {
   for arg in "$@"; do
     case "$arg" in
       -f|--follow) follow=(-f) ;;
-      *) [[ $arg =~ ^[0-9]{1,6}$ ]] || die "usage: fleetbot logs [N] [-f]"; lines="$arg" ;;
+      *) [[ $arg =~ ^[0-9]{1,6}$ ]] || die "usage: fleetpanel logs [N] [-f]"; lines="$arg" ;;
     esac
   done
   journalctl -u "$SERVICE" -n "$lines" --no-pager "${follow[@]}"
@@ -331,7 +331,7 @@ restore_control_plane() {
   local file="$1" work entries safety
   [[ -f $file ]] || die "file not found: $file"
   entries="$(tar -tzf "$file" | sort | tr '\n' ' ')"
-  [[ $entries == "fleetbot.db manifest.json master.key " ]] || die "not a Fleetbot control-plane backup (contents: $entries)"
+  [[ $entries == "fleetpanel.db manifest.json master.key " ]] || die "not a FleetPanel control-plane backup (contents: $entries)"
   echo "This replaces the panel database (administrators, instances, audit log) and the master key"
   echo "with the contents of $(basename "$file"). Bot files and bot databases are not touched."
   [[ "$(ask 'Type RESTORE to continue: ')" == RESTORE ]] || die "aborted"
@@ -339,12 +339,14 @@ restore_control_plane() {
   safety="$(app_cli backup-control-plane "$BACKUPS_DIR")"
   echo "Safety backup of the current state: $safety"
   work="$(mktemp -d)"
-  trap 'rm -rf "$work"' RETURN
+  # The extracted copy holds the master key: remove it however this command ends (die exits).
+  RESTORE_WORK="$work"
+  trap 'rm -rf "$RESTORE_WORK"' EXIT
   tar -xzf "$file" -C "$work" --no-same-owner
   [[ "$(stat -c %s "$work/master.key")" == 32 ]] || die "the backup's master key is not 32 bytes"
 
   systemctl stop "$SERVICE"
-  copy_db "$work/fleetbot.db" "$DATA_DIR/fleetbot.db"
+  copy_db "$work/fleetpanel.db" "$DATA_DIR/fleetpanel.db"
   install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$work/master.key" "$KEY_FILE"
   systemctl start "$SERVICE"
   if healthy; then
@@ -353,16 +355,16 @@ restore_control_plane() {
     echo "The panel did not start after the restore; reverting to the safety backup." >&2
     systemctl stop "$SERVICE"
     tar -xzf "$safety" -C "$work" --no-same-owner
-    copy_db "$work/fleetbot.db" "$DATA_DIR/fleetbot.db"
+    copy_db "$work/fleetpanel.db" "$DATA_DIR/fleetpanel.db"
     install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$work/master.key" "$KEY_FILE"
     systemctl start "$SERVICE"
-    die "restore failed and was reverted. See: sudo fleetbot logs"
+    die "restore failed and was reverted. See: sudo fleetpanel logs"
   fi
 }
 
 cmd_restore() {
   local target="${1:-}"
-  [[ -n $target ]] || die "usage: fleetbot restore <control-plane .tar.gz | instance backup id>  (see: fleetbot backups)"
+  [[ -n $target ]] || die "usage: fleetpanel restore <control-plane .tar.gz | instance backup id>  (see: fleetpanel backups)"
   if [[ $target == *.tar.gz ]]; then
     restore_control_plane "$target"
   else
@@ -377,7 +379,7 @@ cmd_restore() {
 
 cmd_uninstall() {
   local mode instances=() slug db user
-  echo "${C_B}Uninstall Fleetbot${C_0}"
+  echo "${C_B}Uninstall FleetPanel${C_0}"
   echo "  1) Standard: remove the panel, its service, CLI and root helper."
   echo "     Bots keep running; their files, databases and all backups stay in $FLEET_DIR."
   echo "  2) Full purge: ALSO delete every bot (files, databases, Linux users) and all backups."
@@ -400,7 +402,7 @@ cmd_uninstall() {
   fi
 
   systemctl disable --now "$SERVICE" >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/fleetbot.service
+  rm -f /etc/systemd/system/fleetpanel.service
   systemctl daemon-reload
   rm -f "$PANEL_LINK" "$PANEL_SITE"
 
@@ -411,23 +413,23 @@ cmd_uninstall() {
       "$HELPER" instance-remove "$slug" || echo "  (could not remove all files of $slug)" >&2
       "$HELPER" db-drop "$db" "$user" || echo "  (could not drop database $db)" >&2
     done
-    rm -f /etc/nginx/conf.d/fleetbot.conf
+    rm -f /etc/nginx/conf.d/fleetpanel.conf
   fi
   if nginx -t >/dev/null 2>&1; then systemctl reload nginx || true; fi
 
-  rm -f /etc/sudoers.d/fleetbot "$HELPER"
+  rm -f /etc/sudoers.d/fleetpanel "$HELPER"
   rm -rf "$APP_DIR" "$FLEET_DIR/app.new" "$FLEET_DIR/app.prev" "$FLEET_DIR/app.failed"
 
   if [[ $mode == 2 ]]; then
-    rm -rf "$FLEET_DIR" /etc/fleetbot
+    rm -rf "$FLEET_DIR" /etc/fleetpanel
     userdel "$SERVICE_USER" >/dev/null 2>&1 || true
     groupdel "$SERVICE_USER" >/dev/null 2>&1 || true
-    echo "Fleetbot and all of its bots were removed. Let's Encrypt certificates are left in /etc/letsencrypt."
+    echo "FleetPanel and all of its bots were removed. Let's Encrypt certificates are left in /etc/letsencrypt."
   else
-    echo "Fleetbot was removed. Kept: $FLEET_DIR/{data,config,backups,instances}, /etc/fleetbot."
+    echo "FleetPanel was removed. Kept: $FLEET_DIR/{data,config,backups,instances}, /etc/fleetpanel."
     echo "Bots keep running. Reinstall any time with the install script to manage them again."
   fi
-  rm -f /usr/local/bin/fleetbot
+  rm -f /usr/local/bin/fleetpanel
 }
 
 # ---------------------------------------------------------------------------
@@ -441,7 +443,7 @@ menu() {
     state="$(systemctl is-active "$SERVICE" 2>/dev/null || true)"
     echo
     echo "${C_B}╭──────────────────────────────────────────╮${C_0}"
-    printf '%s│%s %-40s %s│%s\n' "$C_B" "$C_0" "Fleetbot v$(app_version)  ·  channel $(current_ref)" "$C_B" "$C_0"
+    printf '%s│%s %-40s %s│%s\n' "$C_B" "$C_0" "FleetPanel v$(app_version)  ·  channel $(current_ref)" "$C_B" "$C_0"
     echo "${C_B}╰──────────────────────────────────────────╯${C_0}"
     if [[ $state == active ]]; then echo "  Panel: ${C_OK}● running${C_0}"; else echo "  Panel: ${C_BAD}● ${state:-stopped}${C_0}"; fi
     cat <<EOF
@@ -477,9 +479,9 @@ case "${1:-}" in
   "") menu ;;
   status) cmd_status ;;
   doctor) need_root doctor; cmd_doctor ;;
-  start) need_root start; systemctl start "$SERVICE"; healthy && echo "Panel started." || die "the panel did not become healthy; see: sudo fleetbot logs" ;;
+  start) need_root start; systemctl start "$SERVICE"; healthy && echo "Panel started." || die "the panel did not become healthy; see: sudo fleetpanel logs" ;;
   stop) need_root stop; systemctl stop "$SERVICE"; echo "Panel stopped. Bots keep running." ;;
-  restart) need_root restart; systemctl restart "$SERVICE"; healthy && echo "Panel restarted." || die "the panel did not become healthy; see: sudo fleetbot logs" ;;
+  restart) need_root restart; systemctl restart "$SERVICE"; healthy && echo "Panel restarted." || die "the panel did not become healthy; see: sudo fleetpanel logs" ;;
   logs) shift; cmd_logs "$@" ;;
   instances) need_root instances; app_cli list-instances ;;
   backups) need_root backups; shift; cmd_backups "$@" ;;

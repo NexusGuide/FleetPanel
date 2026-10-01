@@ -111,7 +111,7 @@ export function Sidebar({
         </div>
         {!collapsed && (
           <div className="min-w-0">
-            <span className="block text-sm font-semibold text-white tracking-tight">Fleetbot</span>
+            <span className="block text-sm font-semibold text-white tracking-tight">FleetPanel</span>
             <span className="block text-[10px] text-slate-500 font-mono">Control plane</span>
           </div>
         )}

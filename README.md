@@ -1,6 +1,6 @@
 <div align="center">
 
-# Fleetbot
+# FleetPanel
 
 ### A secure control plane for hosting many Telegram bots on one Linux server
 
@@ -8,7 +8,7 @@ Deploy and run isolated **MirzaBot** and **Faoxima** instances on a single Ubunt
 its own Linux user, PHP-FPM pool, MySQL database, nginx site and Let's Encrypt certificate, managed from a
 web panel and a CLI.
 
-[![CI](https://github.com/NexusGuide/Fleetbot/actions/workflows/ci.yml/badge.svg)](https://github.com/NexusGuide/Fleetbot/actions/workflows/ci.yml)
+[![CI](https://github.com/NexusGuide/FleetPanel/actions/workflows/ci.yml/badge.svg)](https://github.com/NexusGuide/FleetPanel/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Platform: Ubuntu | Debian](https://img.shields.io/badge/Platform-Ubuntu%20%7C%20Debian-orange?style=flat-square&logo=ubuntu)](docs/installation.md)
 [![Security: Argon2id + AES-256-GCM](https://img.shields.io/badge/Security-Argon2id%20%2B%20AES--256--GCM-red?style=flat-square)](SECURITY.md)
@@ -17,7 +17,7 @@ web panel and a CLI.
 
 </div>
 
-> **Status: v0.2 (pre-release).** Web panel, provisioning, CLI and updates are tested on a real
+> **Status: v0.3 (pre-release).** Web panel, provisioning, CLI and updates are tested on a real
 > Ubuntu 24.04 server with MirzaBot and Faoxima. See the [changelog](CHANGELOG.md) and the [roadmap](#roadmap).
 
 ---
@@ -27,7 +27,7 @@ web panel and a CLI.
 On a fresh or existing Ubuntu 24.04+ / Debian 12+ server, as root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NexusGuide/Fleetbot/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/main/install.sh | sudo bash
 ```
 
 It asks for an optional Let's Encrypt email, the first administrator's name and an optional panel domain,
@@ -38,10 +38,10 @@ then prints the panel URL and a one-time password. Details and non-interactive o
 
 - **Re-runnable:** running it again updates packages and configuration without losing data.
 - **Leaves existing services alone:** it never edits or deletes existing nginx sites, databases or
-  certificates; Fleetbot only adds its own `fleetbot-*` files and `fb_*` databases. An existing
+  certificates; FleetPanel only adds its own `fleetpanel-*` files and `fp_*` databases. An existing
   MySQL/MariaDB server is reused.
 - **No default passwords:** the first Owner gets a random password that is shown once and not stored.
-- **Privilege separation:** the panel runs as the unprivileged `fleetbot` user; a single allowlisted
+- **Privilege separation:** the panel runs as the unprivileged `fleetpanel` user; a single allowlisted
   root helper does the few things that need root.
 - **TLS:** with a panel domain it requests a certificate; without one the panel listens on port `8080`
   over plain HTTP (for testing only).
@@ -59,7 +59,7 @@ Every number and state in the panel comes from the server; nothing is simulated.
 - **Administrators** (Owner only), **audit log** and **my account** (password, sessions)
 
 Creating a bot: point its domain's DNS at the server, then *New instance* → choose MirzaBot or Faoxima →
-domain, bot token from @BotFather and your numeric Telegram id. Fleetbot then downloads the bot, writes its
+domain, bot token from @BotFather and your numeric Telegram id. FleetPanel then downloads the bot, writes its
 config, runs `composer install` and the bot's own schema script, creates the database, the PHP pool and
 nginx site, issues the certificate and registers the webhook.
 
@@ -81,13 +81,13 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 
 ---
 
-## 💻 Fleetbot CLI & diagnostics
+## 💻 FleetPanel CLI & diagnostics
 
-`fleetbot` is installed at `/usr/local/bin/fleetbot`. Run it without arguments for the interactive menu:
+`fleetpanel` is installed at `/usr/local/bin/fleetpanel`. Run it without arguments for the interactive menu:
 
 ```text
 ╭──────────────────────────────────────────╮
-│ Fleetbot v0.2.0  ·  channel main         │
+│ FleetPanel v0.3.0  ·  channel main       │
 ╰──────────────────────────────────────────╯
   Panel: ● running
 
@@ -102,37 +102,37 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 
 | Command | Description |
 | :--- | :--- |
-| `fleetbot status` | Panel service state, health check, version and instances |
-| `fleetbot doctor` | Checks the whole host and reports `[PASS]` / `[WARN]` / `[FAIL]` |
-| `fleetbot start` / `stop` / `restart` | Control the panel service (bots keep running) |
-| `fleetbot logs [N] [-f]` | Last N log lines (secrets are masked); `-f` follows |
-| `fleetbot instances` | List bot instances with provider, domain, bot and status |
-| `fleetbot backups [SLUG]` | List instance backups and control-plane backups |
-| `fleetbot backup` | Back up the control plane: panel database **and master key** |
-| `fleetbot backup SLUG` | Back up one instance (files + database dump) |
-| `fleetbot restore FILE.tar.gz` | Restore a control-plane backup (safety backup first) |
-| `fleetbot restore BACKUP_ID` | Restore an instance backup (safety backup first) |
-| `fleetbot admins` / `create-admin` / `reset-password` | Manage administrators from the server |
-| `fleetbot version` / `channel [REF]` | Show the version; follow `main` or pin a release such as `v0.2.0` |
-| `fleetbot update` | Build the channel's latest version and switch, with automatic rollback |
-| `fleetbot uninstall` | Remove Fleetbot; bots keep running unless you choose full purge |
+| `fleetpanel status` | Panel service state, health check, version and instances |
+| `fleetpanel doctor` | Checks the whole host and reports `[PASS]` / `[WARN]` / `[FAIL]` |
+| `fleetpanel start` / `stop` / `restart` | Control the panel service (bots keep running) |
+| `fleetpanel logs [N] [-f]` | Last N log lines (secrets are masked); `-f` follows |
+| `fleetpanel instances` | List bot instances with provider, domain, bot and status |
+| `fleetpanel backups [SLUG]` | List instance backups and control-plane backups |
+| `fleetpanel backup` | Back up the control plane: panel database **and master key** |
+| `fleetpanel backup SLUG` | Back up one instance (files + database dump) |
+| `fleetpanel restore FILE.tar.gz` | Restore a control-plane backup (safety backup first) |
+| `fleetpanel restore BACKUP_ID` | Restore an instance backup (safety backup first) |
+| `fleetpanel admins` / `create-admin` / `reset-password` | Manage administrators from the server |
+| `fleetpanel version` / `channel [REF]` | Show the version; follow `main` or pin a release such as `v0.3.0` |
+| `fleetpanel update` | Build the channel's latest version and switch, with automatic rollback |
+| `fleetpanel uninstall` | Remove FleetPanel; bots keep running unless you choose full purge |
 
 Full reference: [docs/cli.md](docs/cli.md).
 
 ### 🩺 System doctor
 
 ```text
-Fleetbot doctor — v0.2.0, channel main
+FleetPanel doctor — v0.3.0, channel main
 
   [PASS] Panel service is running
-  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.2.0"})
+  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.3.0"})
   [PASS] nginx configuration is valid
   [PASS] php-fpm 8.3 configuration is valid
   [PASS] MySQL/MariaDB is reachable
-  [PASS] Master key is private (600, fleetbot, 32 bytes)
-  [WARN] No control-plane backup yet: run 'sudo fleetbot backup' and keep the file off this server
+  [PASS] Master key is private (600, fleetpanel, 32 bytes)
+  [WARN] No control-plane backup yet: run 'sudo fleetpanel backup' and keep the file off this server
   [PASS] Privileged helper and sudoers rule are installed
-  [PASS] 41 GB free on /opt/fleetbot
+  [PASS] 41 GB free on /opt/fleetpanel
   [PASS] 3911 MB RAM
   [PASS] Node.js v20.19.5
   [PASS] PHP 8.3.6 with required extensions
@@ -145,14 +145,14 @@ Summary: 14 passed, 1 warnings, 0 failed
 
 *(Example output; your values will differ.)*
 
-> **Back up the master key.** Without `/opt/fleetbot/config/master.key`, stored bot tokens and database
-> passwords cannot be decrypted. Run `sudo fleetbot backup` and copy the file off the server.
+> **Back up the master key.** Without `/opt/fleetpanel/config/master.key`, stored bot tokens and database
+> passwords cannot be decrypted. Run `sudo fleetpanel backup` and copy the file off the server.
 
 ---
 
 ## 🔄 Updates and rollback
 
-`sudo fleetbot update`:
+`sudo fleetpanel update`:
 
 1. Clones the update channel (`main` or a pinned tag) into a staging directory
 2. Installs dependencies and builds it **while the panel keeps running**
@@ -165,10 +165,10 @@ Bots are never stopped by a panel update.
 
 ## 🗑️ Uninstall
 
-`sudo fleetbot uninstall` offers two modes:
+`sudo fleetpanel uninstall` offers two modes:
 
 1. **Standard** (default): takes a final control-plane backup, then removes the panel, service, CLI and
-   root helper. Bots keep running; their files, databases and all backups stay in `/opt/fleetbot`.
+   root helper. Bots keep running; their files, databases and all backups stay in `/opt/fleetpanel`.
 2. **Full purge**: requires typing `PERMANENTLY DELETE INSTANCES`; also unregisters webhooks and deletes
    every bot's files, database and Linux user, and all backups.
 
@@ -181,7 +181,7 @@ npm ci
 npm test            # API, security and provisioning tests
 npm run lint        # type-checks the server and the web UI
 npm run build       # dist/server.js + dist/public (the web UI)
-bash -n install.sh bin/fleetbot deploy/fleetbot-helper
+bash -n install.sh bin/fleetpanel deploy/fleetpanel-helper
 ```
 
 Tests cover authentication, CSRF and origin checks, RBAC, injection attempts, encryption at rest, the
@@ -208,5 +208,5 @@ CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](
 
 ## 📄 License
 
-Fleetbot is open-source software licensed under the [MIT License](LICENSE). MirzaBot and Faoxima are
-separate projects with their own licenses; Fleetbot downloads them from their repositories at install time.
+FleetPanel is open-source software licensed under the [MIT License](LICENSE). MirzaBot and Faoxima are
+separate projects with their own licenses; FleetPanel downloads them from their repositories at install time.

@@ -154,7 +154,7 @@ export function DashboardPage({
                     <span className="text-white">{formatDuration(sys.uptime_seconds)}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>Fleetbot</span>
+                    <span>FleetPanel</span>
                     <span className="text-white">v{sys.version}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">

@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
 
-// The UI is served by the Fleetbot server itself (same origin), so the strict
+// The UI is served by the FleetPanel server itself (same origin), so the strict
 // CSP (script-src 'self', no inline code) applies to the production build.
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),

@@ -102,7 +102,7 @@ async function freshLogin(username: string, password: string): Promise<Login> {
 }
 
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetbot-test-'));
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetpanel-test-'));
   const instancesDir = path.join(tmp, 'instances');
   const backupsDir = path.join(tmp, 'backups');
   fs.mkdirSync(instancesDir);

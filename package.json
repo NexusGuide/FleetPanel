@@ -1,6 +1,6 @@
 {
-  "name": "fleetbot",
-  "version": "0.2.0",
+  "name": "fleetpanel",
+  "version": "0.3.0",
   "private": true,
   "description": "Secure control plane for hosting multiple Telegram bot instances on one Linux server",
   "license": "MIT",

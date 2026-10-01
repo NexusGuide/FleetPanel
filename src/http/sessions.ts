@@ -2,7 +2,7 @@ import type { DB } from '../db.js';
 import { randomToken, sha256Hex } from '../security/crypto.js';
 import type { Role } from '../security/rbac.js';
 
-export const SESSION_COOKIE = 'fb_session';
+export const SESSION_COOKIE = 'fp_session';
 export const SESSION_IDLE_MS = 2 * 60 * 60 * 1000;
 export const SESSION_ABSOLUTE_MS = 24 * 60 * 60 * 1000;
 

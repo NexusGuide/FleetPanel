@@ -18,7 +18,7 @@ import { systemToolchain } from './system/toolchain.js';
 import { run } from './system/exec.js';
 import { errorMessage } from './errors.js';
 
-// Run by bin/fleetbot as the fleetbot service user (never as root).
+// Run by bin/fleetpanel as the fleetpanel service user (never as root).
 const USAGE = `Usage: node dist/cli.js <command>
 
   has-admins                         exit 0 if at least one administrator exists
@@ -178,7 +178,7 @@ async function main(argv: string[]): Promise<void> {
     case 'list-instances': {
       const rows = withDb(listInstances);
       if (rest.includes('--tsv')) {
-        // slug, provider, domain, status, db_name, db_user (consumed by bin/fleetbot)
+        // slug, provider, domain, status, db_name, db_user (consumed by bin/fleetpanel)
         for (const r of rows) console.log([r.slug, r.provider, r.domain, r.status, r.db_name, r.db_user].join('\t'));
         return;
       }
@@ -228,7 +228,7 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'restore-instance': {
       const id = rest[0] ?? '';
-      if (!BACKUP_ID_RE.test(id)) fail('usage: restore-instance <backup-id> (see: fleetbot backups)', 2);
+      if (!BACKUP_ID_RE.test(id)) fail('usage: restore-instance <backup-id> (see: fleetpanel backups)', 2);
       const db = openDb();
       try {
         const result = await services(db).instances.restore(id, 'cli');
@@ -243,17 +243,17 @@ async function main(argv: string[]): Promise<void> {
       if (!destDir) fail('usage: backup-control-plane <dir>', 2);
       const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
       const dest = path.join(destDir, `control-plane-${stamp}.tar.gz`);
-      const work = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetbot-cp-'));
+      const work = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetpanel-cp-'));
       const db = openDb();
       try {
         // The SQLite online backup API gives a consistent copy even while the panel is writing.
-        await db.backup(path.join(work, 'fleetbot.db'));
+        await db.backup(path.join(work, 'fleetpanel.db'));
         fs.copyFileSync(config.masterKeyFile, path.join(work, 'master.key'));
         fs.writeFileSync(
           path.join(work, 'manifest.json'),
           JSON.stringify({ format: 1, kind: 'control-plane', created_at: new Date().toISOString() }, null, 2),
         );
-        await run('tar', ['-czf', dest, '-C', work, 'fleetbot.db', 'master.key', 'manifest.json']);
+        await run('tar', ['-czf', dest, '-C', work, 'fleetpanel.db', 'master.key', 'manifest.json']);
         fs.chmodSync(dest, 0o600);
         new AuditLog(db).write({ actor: 'cli', action: 'CONTROL_PLANE_BACKUP', resource: 'control-plane', resourceId: path.basename(dest), status: 'SUCCESS' });
       } finally {
