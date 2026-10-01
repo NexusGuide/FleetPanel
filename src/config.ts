@@ -1,0 +1,30 @@
+import path from 'node:path';
+
+function env(name: string, fallback: string): string {
+  const value = process.env[name];
+  return value !== undefined && value !== '' ? value : fallback;
+}
+
+function parseTrustProxy(value: string): string | boolean {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
+}
+
+const root = env('FLEET_DIR', '/opt/fleetbot');
+
+export const config = {
+  root,
+  dataDir: env('DATA_DIR', path.join(root, 'data')),
+  instancesDir: env('INSTANCES_DIR', path.join(root, 'instances')),
+  backupsDir: env('BACKUPS_DIR', path.join(root, 'backups')),
+  masterKeyFile: env('MASTER_KEY_FILE', path.join(root, 'config', 'master.key')),
+  helperPath: env('HELPER_PATH', '/usr/local/sbin/fleetbot-helper'),
+  // The panel is always published through nginx; never bind to a public interface.
+  host: env('HOST', '127.0.0.1'),
+  port: Number.parseInt(env('PORT', '3000'), 10),
+  cookieSecure: env('COOKIE_SECURE', 'true') !== 'false',
+  // nginx runs on the same host, so only loopback is a trusted proxy.
+  trustProxy: parseTrustProxy(env('TRUST_PROXY', 'loopback')),
+  backupRetention: Number.parseInt(env('BACKUP_RETENTION', '7'), 10),
+};
