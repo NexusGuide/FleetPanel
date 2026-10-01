@@ -54,8 +54,19 @@ pool_file() { printf '/etc/php/%s/fpm/pool.d/fleetbot-%s.conf' "$2" "$1"; }
 vhost_file() { printf '%s/fleetbot-%s.conf' "$NGINX_AVAILABLE" "$1"; }
 vhost_link() { printf '%s/fleetbot-%s.conf' "$NGINX_ENABLED" "$1"; }
 
+# Validates php-fpm and nginx config. On failure CONFIG_ERROR holds the tail of the
+# tool's own output, so callers can report the real reason instead of a generic one.
+CONFIG_ERROR=""
 config_ok() {
-  "php-fpm$1" -t >/dev/null 2>&1 && nginx -t >/dev/null 2>&1
+  local out
+  if ! out="$("php-fpm$1" -t 2>&1)"; then
+    CONFIG_ERROR="php-fpm: $(printf '%s' "$out" | grep -v 'test is successful' | tail -n 3 | tr '\n' ' ')"
+    return 1
+  fi
+  if ! out="$(nginx -t 2>&1)"; then
+    CONFIG_ERROR="nginx: $(printf '%s' "$out" | grep -E 'emerg|error|failed' | tail -n 3 | tr '\n' ' ')"
+    return 1
+  fi
 }
 
 reload_services() {
@@ -180,7 +191,7 @@ EOF
   ln -sfn "$vhost" "$link"
   if ! config_ok "$php"; then
     rm -f "$pool" "$vhost" "$link"
-    die "generated configuration failed validation; nothing was enabled"
+    die "generated configuration failed validation; nothing was enabled. ${CONFIG_ERROR}"
   fi
   reload_services "$php"
 }
@@ -200,7 +211,7 @@ cmd_instance_enable() {
   ln -sfn "$vhost" "$link"
   if ! config_ok "$php"; then
     rm -f "$link"
-    die "configuration test failed; instance left disabled"
+    die "configuration test failed; instance left disabled. ${CONFIG_ERROR}"
   fi
   reload_services "$php"
 }
@@ -214,7 +225,7 @@ cmd_instance_disable() {
   pool="$(pool_file "$slug" "$php")"
   rm -f "$(vhost_link "$slug")"
   if [[ -f $pool ]]; then mv -f "$pool" "$pool.disabled"; fi
-  config_ok "$php" || die "configuration test failed after disabling"
+  config_ok "$php" || die "configuration test failed after disabling. ${CONFIG_ERROR}"
   reload_services "$php"
 }
 

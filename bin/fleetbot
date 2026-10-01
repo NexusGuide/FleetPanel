@@ -36,11 +36,20 @@ healthy() {
 
 build() {
   (
-    cd "$APP_DIR"
-    npm ci --no-audit --no-fund --loglevel=error
+    cd "$1"
+    echo "Installing dependencies (can take a few minutes; the panel keeps running)..."
+    npm ci --no-audit --no-fund --loglevel=error --prefer-offline
     npm run build --silent
     npm prune --omit=dev --no-audit --no-fund --loglevel=error
   )
+}
+
+install_system_files() {
+  local dir="$1"
+  install -o root -g root -m 0755 "$dir/deploy/fleetbot-helper" /usr/local/sbin/fleetbot-helper
+  # This script is still running: replace it by rename so bash keeps reading the old inode.
+  install -o root -g root -m 0755 "$dir/bin/fleetbot" /usr/local/bin/fleetbot.new
+  mv -f /usr/local/bin/fleetbot.new /usr/local/bin/fleetbot
 }
 
 # Copies the SQLite database together with its WAL, so committed-but-not-checkpointed
@@ -53,37 +62,55 @@ copy_db() {
   done
 }
 
+# Builds the new version in a staging directory while the panel keeps running, then
+# swaps directories. Downtime is a few seconds, and rollback is a rename (no rebuild).
 cmd_update() {
-  local prev snapshot ref
+  local prev ref url snapshot
+  local staging="$FLEET_DIR/app.new" previous="$FLEET_DIR/app.prev"
   ref="$(cat /etc/fleetbot/ref 2>/dev/null || echo main)"
   [[ $ref =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || { echo "Invalid ref in /etc/fleetbot/ref" >&2; exit 1; }
+  url="$(git -C "$APP_DIR" remote get-url origin)"
   prev="$(git -C "$APP_DIR" rev-parse HEAD)"
-  snapshot="$FLEET_DIR/backups/control-plane-$(date -u +%Y%m%dT%H%M%SZ).db"
-
-  echo "Stopping service and snapshotting the control-plane database..."
-  systemctl stop fleetbot.service
-  copy_db "$DATA_DIR/fleetbot.db" "$snapshot"
-
-  rollback() {
-    echo "Update failed: rolling back to ${prev:0:12}" >&2
-    git -C "$APP_DIR" reset --quiet --hard "$prev"
-    build || true
-    systemctl stop fleetbot.service || true
-    copy_db "$snapshot" "$DATA_DIR/fleetbot.db"
-    systemctl start fleetbot.service
-    exit 1
-  }
 
   echo "Fetching $ref..."
-  git -C "$APP_DIR" fetch --quiet --depth 1 origin "$ref" || rollback
-  git -C "$APP_DIR" reset --quiet --hard FETCH_HEAD || rollback
-  build || rollback
-  install -o root -g root -m 0755 "$APP_DIR/deploy/fleetbot-helper" /usr/local/sbin/fleetbot-helper
-  # This script is still running: replace it by rename so bash keeps reading the old inode.
-  install -o root -g root -m 0755 "$APP_DIR/bin/fleetbot" /usr/local/bin/fleetbot.new
-  mv -f /usr/local/bin/fleetbot.new /usr/local/bin/fleetbot
+  rm -rf "$staging"
+  git clone --quiet --depth 1 --branch "$ref" "$url" "$staging"
+  if [[ "$(git -C "$staging" rev-parse HEAD)" == "$prev" ]]; then
+    rm -rf "$staging"
+    echo "Already up to date (${prev:0:12})."
+    return 0
+  fi
+  if ! build "$staging"; then
+    rm -rf "$staging"
+    echo "Build failed; nothing was changed and the panel is still running ${prev:0:12}." >&2
+    exit 1
+  fi
+  chown -R root:root "$staging"
+
+  snapshot="$FLEET_DIR/backups/control-plane-$(date -u +%Y%m%dT%H%M%SZ).db"
+  echo "Switching to the new version..."
+  systemctl stop fleetbot.service
+  copy_db "$DATA_DIR/fleetbot.db" "$snapshot"
+  rm -rf "$previous"
+  mv "$APP_DIR" "$previous"
+  mv "$staging" "$APP_DIR"
+  install_system_files "$APP_DIR"
   systemctl start fleetbot.service
-  healthy || rollback
+
+  if ! healthy; then
+    echo "Health check failed: rolling back to ${prev:0:12}" >&2
+    journalctl -u fleetbot.service -n 15 --no-pager >&2 || true
+    systemctl stop fleetbot.service || true
+    rm -rf "$APP_DIR.failed"
+    mv "$APP_DIR" "$APP_DIR.failed"
+    mv "$previous" "$APP_DIR"
+    install_system_files "$APP_DIR"
+    copy_db "$snapshot" "$DATA_DIR/fleetbot.db"
+    systemctl start fleetbot.service
+    echo "Rolled back. The failed build is kept in $APP_DIR.failed for inspection." >&2
+    exit 1
+  fi
+  rm -rf "$previous"
   echo "Updated ${prev:0:12} -> $(git -C "$APP_DIR" rev-parse --short=12 HEAD). DB snapshot: $snapshot"
 }
 
