@@ -13,6 +13,12 @@ real server and the bots' cron jobs are still to come.
     (with a pre-delete backup); failed installs show the real error and the failing step
   - Backups: list, restore (a safety backup is taken first), delete
   - Administrators (Owner only), audit log with filters, account and session management
+- **Operator CLI** (`fleetbot`): interactive menu, `doctor` (host checks with PASS/WARN/FAIL),
+  `start`/`stop`/`restart`, `logs -f`, `instances`, `backups`, `version`, `channel` (follow `main` or pin
+  a release), and `uninstall` (standard, or full purge with typed confirmation)
+- **Control-plane backup and restore** (`fleetbot backup` / `fleetbot restore FILE`): the panel database
+  and the master key, which previously had no backup at all; instance backup/restore from the CLI too
+- Documentation: architecture, installation, CLI, REST API, providers, security details, contributing
 - `GET /api/system` and `GET /api/system/providers`
 - CI (type-check, tests, build, shell checks)
 

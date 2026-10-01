@@ -77,7 +77,7 @@ mysqladmin --protocol=socket -u root ping >/dev/null 2>&1 \
 PHP_VER="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
 [[ $PHP_VER =~ ^[0-9]\.[0-9]$ ]] || die "Could not detect the PHP version."
 if ! php -r 'exit(PHP_VERSION_ID >= 80200 ? 0 : 1);'; then
-  warn "PHP $PHP_VER is installed, but MirzaBot and Faoxima need PHP >= 8.2 (Ubuntu 24.04+ / Debian 13+ ship it). The panel installs, but bots will fail to provision."
+  warn "PHP $PHP_VER is installed, but MirzaBot and Faoxima need PHP >= 8.2 (Ubuntu 24.04+ / Debian 12+ ship it). The panel installs, but bots will fail to provision."
 fi
 systemctl enable --now "php${PHP_VER}-fpm" >/dev/null
 
@@ -270,5 +270,8 @@ if [[ -n $ADMIN_PASS ]]; then
   echo "  Password  : $ADMIN_PASS"
   echo "  (shown once and not stored anywhere; change it with: sudo fleetbot reset-password $ADMIN_USER)"
 fi
-echo "  Status    : sudo fleetbot status"
+echo "  Manage    : sudo fleetbot          (menu; or: status, doctor, logs, update)"
+echo
+echo "  Next: back up the master key and copy the file OFF this server:"
+echo "        sudo fleetbot backup"
 echo

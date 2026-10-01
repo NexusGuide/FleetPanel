@@ -1,117 +1,212 @@
+<div align="center">
+
 # Fleetbot
 
-A small, security-first control plane for hosting multiple Telegram bots (MirzaBot, Faoxima)
-on one Ubuntu/Debian server. Each bot gets its own Linux user, php-fpm pool, MySQL database,
-nginx vhost and Let's Encrypt certificate.
+### A secure control plane for hosting many Telegram bots on one Linux server
 
-> **Status: v0.2.** Web panel, REST API, installer and CLI are functional.
+Deploy and run isolated **MirzaBot** and **Faoxima** instances on a single Ubuntu/Debian VPS: each bot gets
+its own Linux user, PHP-FPM pool, MySQL database, nginx site and Let's Encrypt certificate, managed from a
+web panel and a CLI.
 
-## Web panel
+[![CI](https://github.com/NexusGuide/Fleetbot/actions/workflows/ci.yml/badge.svg)](https://github.com/NexusGuide/Fleetbot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Platform: Ubuntu | Debian](https://img.shields.io/badge/Platform-Ubuntu%20%7C%20Debian-orange?style=flat-square&logo=ubuntu)](docs/installation.md)
+[![Security: Argon2id + AES-256-GCM](https://img.shields.io/badge/Security-Argon2id%20%2B%20AES--256--GCM-red?style=flat-square)](SECURITY.md)
+[![Node.js 20.19+](https://img.shields.io/badge/Node.js-20.19%2B-green?style=flat-square&logo=node.js)](https://nodejs.org)
+[![PHP 8.2+](https://img.shields.io/badge/PHP-8.2%2B-777bb4?style=flat-square&logo=php)](https://www.php.net)
 
-Open the panel URL the installer prints and sign in with the Owner account it created. The panel shows
-only real data from this server:
+</div>
 
-- **Dashboard**: instance counts, server CPU load, memory and disk, recent activity
-- **Instances**: create (guided wizard), start, stop, back up, reprovision after a failure, delete
-  (with a pre-delete backup), and the real `last_error` when an install fails
-- **Backups**: list, restore (a safety backup is taken first), delete
-- **Administrators** (Owner only): create accounts, change roles, disable access
-- **Audit log**: every sign-in, change and denied request, including failures and client IP
-- **My account**: change password, see and sign out your sessions
+> **Status: v0.2 (pre-release).** Web panel, provisioning, CLI and updates are tested on a real
+> Ubuntu 24.04 server with MirzaBot and Faoxima. See the [changelog](CHANGELOG.md) and the [roadmap](#roadmap).
 
-Buttons a role is not allowed to use are hidden; the server enforces the same rules on every request.
+---
 
-## Install
+## ⚡ One-line installer
+
+On a fresh or existing Ubuntu 24.04+ / Debian 12+ server, as root:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NexusGuide/Fleetbot/main/install.sh | sudo bash
 ```
 
-The installer:
+It asks for an optional Let's Encrypt email, the first administrator's name and an optional panel domain,
+then prints the panel URL and a one-time password. Details and non-interactive options:
+[installation guide](docs/installation.md).
 
-- installs nginx, MariaDB (unless MySQL/MariaDB already exists), PHP-FPM, certbot and Node.js 20 (>= 20.19)
-- creates an unprivileged `fleetbot` service user and a single allowlisted root helper
-- creates the first **Owner** account with a random password that is printed once
-- adds only its own files; it never deletes or edits existing nginx sites, databases or certificates
+### What the installer does (and does not do)
 
-In IP mode the panel listens on port `8080` (override with `FLEETBOT_PANEL_PORT`). Use a domain
-(`FLEETBOT_DOMAIN=panel.example.com`) to get TLS; plain HTTP is for testing only.
+- **Re-runnable:** running it again updates packages and configuration without losing data.
+- **Leaves existing services alone:** it never edits or deletes existing nginx sites, databases or
+  certificates; Fleetbot only adds its own `fleetbot-*` files and `fb_*` databases. An existing
+  MySQL/MariaDB server is reused.
+- **No default passwords:** the first Owner gets a random password that is shown once and not stored.
+- **Privilege separation:** the panel runs as the unprivileged `fleetbot` user; a single allowlisted
+  root helper does the few things that need root.
+- **TLS:** with a panel domain it requests a certificate; without one the panel listens on port `8080`
+  over plain HTTP (for testing only).
 
-## Operate
+---
 
-```bash
-sudo fleetbot status
-sudo fleetbot logs 200
-sudo fleetbot create-admin alice --role Manager
-sudo fleetbot reset-password alice
-sudo fleetbot update      # snapshots the DB, rebuilds, rolls back on a failed health check
-                          # (follows the branch/tag you installed from, FLEETBOT_REF)
+## 🖥️ Web panel
+
+Every number and state in the panel comes from the server; nothing is simulated.
+
+- **Dashboard:** instance counts, server CPU load, memory and disk, recent activity
+- **Instances:** a guided create wizard, start, stop, backup, **repair/reprovision**, delete (with a
+  pre-delete backup). If an install fails, the panel shows the failing step and the real error.
+- **Backups:** list, restore (a safety backup is taken first), delete
+- **Administrators** (Owner only), **audit log** and **my account** (password, sessions)
+
+Creating a bot: point its domain's DNS at the server, then *New instance* → choose MirzaBot or Faoxima →
+domain, bot token from @BotFather and your numeric Telegram id. Fleetbot then downloads the bot, writes its
+config, runs `composer install` and the bot's own schema script, creates the database, the PHP pool and
+nginx site, issues the certificate and registers the webhook.
+
+---
+
+## 🛡️ Security model
+
+- **Argon2id** password hashing (RFC 9106: 64 MiB, t=3, p=4); unknown usernames take as long as wrong passwords
+- **AES-256-GCM** encryption at rest for bot tokens, database passwords and webhook secrets, with
+  per-record associated data; the server refuses to start if the master key is readable by others
+- **Sessions** stored hashed in SQLite, `HttpOnly`, `SameSite=Strict`, `Secure` over TLS, 2 h idle / 24 h absolute
+- **CSRF** token on every authenticated write plus an `Origin` check; **rate limiting** on login and sensitive actions
+- **RBAC** with five roles enforced on every API route; **append-only audit log** (including failures and client IP)
+- **No shell:** every command runs with an argument array; all inputs are allowlist-validated, again as root in the helper
+- **Webhook protection:** nginx rejects Telegram webhook calls without the instance's secret
+- **Strict CSP** for the panel: `script-src 'self'`, no inline code, no third-party assets
+
+Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md).
+
+---
+
+## 💻 Fleetbot CLI & diagnostics
+
+`fleetbot` is installed at `/usr/local/bin/fleetbot`. Run it without arguments for the interactive menu:
+
+```text
+╭──────────────────────────────────────────╮
+│ Fleetbot v0.2.0  ·  channel main         │
+╰──────────────────────────────────────────╯
+  Panel: ● running
+
+  1) Status            6) Back up control plane
+  2) Doctor            7) Restore a backup
+  3) Logs              8) Update
+  4) Instances         9) Version / update channel
+  5) Backups          10) Restart panel
+                      11) Uninstall
+  0) Exit
 ```
 
-## API overview
+| Command | Description |
+| :--- | :--- |
+| `fleetbot status` | Panel service state, health check, version and instances |
+| `fleetbot doctor` | Checks the whole host and reports `[PASS]` / `[WARN]` / `[FAIL]` |
+| `fleetbot start` / `stop` / `restart` | Control the panel service (bots keep running) |
+| `fleetbot logs [N] [-f]` | Last N log lines (secrets are masked); `-f` follows |
+| `fleetbot instances` | List bot instances with provider, domain, bot and status |
+| `fleetbot backups [SLUG]` | List instance backups and control-plane backups |
+| `fleetbot backup` | Back up the control plane: panel database **and master key** |
+| `fleetbot backup SLUG` | Back up one instance (files + database dump) |
+| `fleetbot restore FILE.tar.gz` | Restore a control-plane backup (safety backup first) |
+| `fleetbot restore BACKUP_ID` | Restore an instance backup (safety backup first) |
+| `fleetbot admins` / `create-admin` / `reset-password` | Manage administrators from the server |
+| `fleetbot version` / `channel [REF]` | Show the version; follow `main` or pin a release such as `v0.2.0` |
+| `fleetbot update` | Build the channel's latest version and switch, with automatic rollback |
+| `fleetbot uninstall` | Remove Fleetbot; bots keep running unless you choose full purge |
 
-All writes need the session cookie plus the `X-CSRF-Token` returned by `/api/auth/login` or `/api/auth/me`.
+Full reference: [docs/cli.md](docs/cli.md).
 
-| Method | Path | Permission |
-| --- | --- | --- |
-| POST | `/api/auth/login` | none |
-| GET | `/api/auth/me` | none |
-| GET / DELETE | `/api/auth/sessions[/:publicId]` | own sessions |
-| POST | `/api/auth/password` | authenticated |
-| GET / POST | `/api/instances` | `instances.read` / `instances.create` |
-| POST | `/api/instances/:id/start`, `/stop` | `instances.control` |
-| POST | `/api/instances/:id/reprovision` | `instances.create` |
-| DELETE | `/api/instances/:id?backup=false` | `instances.delete` |
-| GET / POST | `/api/instances/:id/backups` | `backups.read` / `backups.create` |
-| POST | `/api/backups/:id/restore` | `backups.restore` |
-| GET / POST / PATCH | `/api/admins[/:id]` | `admins.manage` (Owner) |
-| DELETE | `/api/backups/:id` | `backups.restore` |
-| GET | `/api/audit-logs?limit=&before=` | `audit.read` |
-| GET | `/api/system`, `/api/system/providers` | `instances.read` |
+### 🩺 System doctor
 
-Creating an instance:
+```text
+Fleetbot doctor — v0.2.0, channel main
 
-```json
-POST /api/instances
-{ "slug": "shop-bot", "provider": "mirza", "domain": "shop.example.com",
-  "bot_token": "123456:ABC...", "admin_telegram_id": "123456789" }
+  [PASS] Panel service is running
+  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.2.0"})
+  [PASS] nginx configuration is valid
+  [PASS] php-fpm 8.3 configuration is valid
+  [PASS] MySQL/MariaDB is reachable
+  [PASS] Master key is private (600, fleetbot, 32 bytes)
+  [WARN] No control-plane backup yet: run 'sudo fleetbot backup' and keep the file off this server
+  [PASS] Privileged helper and sudoers rule are installed
+  [PASS] 41 GB free on /opt/fleetbot
+  [PASS] 3911 MB RAM
+  [PASS] Node.js v20.19.5
+  [PASS] PHP 8.3.6 with required extensions
+  [PASS] Composer is installed
+  [PASS] Certificate auto-renewal is scheduled
+  [PASS] 2 instance(s), none in the error state
+
+Summary: 14 passed, 1 warnings, 0 failed
 ```
 
-The request returns `202` immediately; poll `GET /api/instances/:id` until `status` is `running`
-or `error` (with the real reason in `last_error`). Point the domain's DNS at the server first,
-because provisioning issues a certificate and registers the Telegram webhook over HTTPS.
+*(Example output; your values will differ.)*
 
-## Roles
+> **Back up the master key.** Without `/opt/fleetbot/config/master.key`, stored bot tokens and database
+> passwords cannot be decrypted. Run `sudo fleetbot backup` and copy the file off the server.
 
-| Role | Can |
-| --- | --- |
-| Owner | everything, including managing admins |
-| Admin | everything except managing admins |
-| Manager | create/control instances, create backups, read audit log |
-| Support | start/stop instances, read |
-| Viewer | read instances and backups |
+---
 
-## Development
+## 🔄 Updates and rollback
+
+`sudo fleetbot update`:
+
+1. Clones the update channel (`main` or a pinned tag) into a staging directory
+2. Installs dependencies and builds it **while the panel keeps running**
+3. Stops the panel, snapshots the control-plane database (with its WAL)
+4. Swaps the new build in and updates the root helper and CLI
+5. Starts the panel and checks its health
+6. If the health check fails, it **swaps the previous build back** and restores the database snapshot
+
+Bots are never stopped by a panel update.
+
+## 🗑️ Uninstall
+
+`sudo fleetbot uninstall` offers two modes:
+
+1. **Standard** (default): takes a final control-plane backup, then removes the panel, service, CLI and
+   root helper. Bots keep running; their files, databases and all backups stay in `/opt/fleetbot`.
+2. **Full purge**: requires typing `PERMANENTLY DELETE INSTANCES`; also unregisters webhooks and deletes
+   every bot's files, database and Linux user, and all backups.
+
+---
+
+## 🧪 Development and tests
 
 ```bash
 npm ci
-npm test
+npm test            # API, security and provisioning tests
 npm run lint        # type-checks the server and the web UI
 npm run build       # dist/server.js + dist/public (the web UI)
+bash -n install.sh bin/fleetbot deploy/fleetbot-helper
 ```
 
-The UI lives in `web/` (React + Vite + Tailwind). For UI work run `npm run dev` (API on :3000) and
-`npm run dev:web` (Vite on :5173, proxies `/api`). The production build is served by the Fleetbot
-server itself under a strict CSP (`script-src 'self'`), so do not add inline scripts or external assets.
-
-See [SECURITY.md](SECURITY.md) for the security model.
+Tests cover authentication, CSRF and origin checks, RBAC, injection attempts, encryption at rest, the
+provisioning steps of both providers (with the system calls stubbed), audit logging and backups.
+CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-- Per-instance version pinning and upgrades (git tags) with automatic rollback
-- PasarGuard (Python) provider
+- Cron jobs for the bots' scheduled tasks (expiry reminders, built-in bot backups)
+- Restoring a backup into a deleted instance
+- Per-instance version pinning and upgrades
+- PasarGuard provider
 - Scheduled backups and off-site upload
 
-## License
+## 📖 Documentation
 
-MIT
+- [System architecture](docs/architecture.md)
+- [Installation guide](docs/installation.md)
+- [Security policy](SECURITY.md) and [implementation details](docs/security.md)
+- [CLI reference](docs/cli.md)
+- [REST API](docs/api.md)
+- [Bot providers](docs/providers.md)
+- [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
+
+## 📄 License
+
+Fleetbot is open-source software licensed under the [MIT License](LICENSE). MirzaBot and Faoxima are
+separate projects with their own licenses; Fleetbot downloads them from their repositories at install time.
