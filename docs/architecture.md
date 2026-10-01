@@ -13,9 +13,9 @@ PHP sites under nginx and PHP-FPM; FleetPanel creates and manages them but is no
                     ▼             ▼
    ┌──────────────────────┐   ┌───────────────────────────────┐
    │ FleetPanel control     │   │ Bot instance (per slug)       │
-   │ plane 127.0.0.1:3000 │   │ PHP-FPM pool  user fb-<slug>  │
+   │ plane 127.0.0.1:3000 │   │ PHP-FPM pool  user fp-<slug>  │
    │ user: fleetpanel       │   │ /opt/fleetpanel/instances/<slug>│
-   │ REST API + web panel │   │ MySQL database fb_<slug>      │
+   │ REST API + web panel │   │ MySQL database fp_<slug>      │
    └──────┬───────────────┘   └───────────────────────────────┘
           │ sudo (one allowlisted command)
    ┌──────▼───────────────┐
@@ -31,7 +31,7 @@ PHP sites under nginx and PHP-FPM; FleetPanel creates and manages them but is no
 | `dist/public/` | served by the control plane | Web panel (React, built by Vite) |
 | `/usr/local/sbin/fleetpanel-helper` | root via one sudoers rule | The only privileged operations, with re-validated arguments |
 | `/usr/local/bin/fleetpanel` | root (operator) | CLI: status, doctor, backups, update, uninstall |
-| Bot PHP-FPM pool | `fb-<slug>` | Runs one bot, `open_basedir` limited to its directory |
+| Bot PHP-FPM pool | `fp-<slug>` | Runs one bot, `open_basedir` limited to its directory |
 
 The control plane listens on `127.0.0.1` only. nginx publishes it on the panel domain (or port 8080) and
 passes the client address; `trust proxy` is limited to loopback.
@@ -44,7 +44,7 @@ passes the client address; `trust proxy` is limited to loopback.
 ├── data/fleetpanel.db     SQLite: admins, sessions, instances, encrypted secrets, backups, audit log (0700)
 ├── config/master.key    32-byte AES-256-GCM key (0600, fleetpanel) — back it up off the server
 ├── backups/             Instance backups and control-plane backups (0700)
-└── instances/<slug>/    Each bot's files (owned by fb-<slug>; fleetpanel and nginx via ACLs)
+└── instances/<slug>/    Each bot's files (owned by fp-<slug>; fleetpanel and nginx via ACLs)
 
 /etc/fleetpanel/           php-version, ref (update channel), acme-email
 /etc/nginx/sites-*/fleetpanel-*.conf, /etc/php/<v>/fpm/pool.d/fleetpanel-*.conf

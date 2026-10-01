@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# FleetPanel installer (Ubuntu 24.04+/Debian 12+). Safe to re-run; also migrates a
-# Fleetbot (<= v0.2, the project's former name) install in place.
+# FleetPanel installer (Ubuntu 24.04+/Debian 12+). Safe to re-run.
 #
 #   curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/main/install.sh | sudo bash
 #
@@ -8,7 +7,7 @@
 # FLEETPANEL_PANEL_PORT (IP mode only, default 8080), FLEETPANEL_REF (git branch/tag, default main).
 #
 # What it does NOT do: it never deletes or edits existing nginx sites, databases or
-# certificates. FleetPanel only adds its own files (fleetpanel-*.conf, fb_* databases).
+# certificates. FleetPanel only adds its own files (fleetpanel-*.conf, fp_* databases).
 set -euo pipefail
 
 REPO_URL="${FLEETPANEL_REPO:-https://github.com/NexusGuide/FleetPanel.git}"
@@ -82,77 +81,10 @@ if ! php -r 'exit(PHP_VERSION_ID >= 80200 ? 0 : 1);'; then
 fi
 systemctl enable --now "php${PHP_VER}-fpm" >/dev/null
 
-# Offer the current panel domain as the default when re-running (or migrating).
+# Offer the current panel domain as the default when re-running.
 EXISTING_DOMAIN="$(grep -hoP '^\s*server_name\s+\K[a-z0-9.-]+(?=;)' \
-  /etc/nginx/sites-available/fleetpanel-panel.conf /etc/nginx/sites-available/fleetbot-panel.conf 2>/dev/null | head -n 1 || true)"
+  /etc/nginx/sites-available/fleetpanel-panel.conf 2>/dev/null | head -n 1 || true)"
 [[ $EXISTING_DOMAIN =~ $DOMAIN_RE ]] || EXISTING_DOMAIN=""
-
-# ---------------------------------------------------------------------------
-# One-time migration from the project's former name (Fleetbot, <= v0.2). Same data,
-# new names; bots keep their files, databases (fb_*) and Linux users (fb-*).
-OLD_DIR=/opt/fleetbot
-migrate_from_fleetbot() {
-  local f new enabled user home
-  info "Migrating the existing Fleetbot install to FleetPanel (bots stay installed; expect a short interruption)"
-  [[ -f $OLD_DIR/config/master.key ]] || die "$OLD_DIR exists but has no master key; refusing to migrate automatically."
-
-  systemctl disable --now fleetbot.service >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/fleetbot.service
-  systemctl daemon-reload
-
-  # Rewrite only exact paths and names, so domains or slugs containing "fleetbot" stay intact.
-  rename_refs() {
-    sed -e 's#/opt/fleetbot/#/opt/fleetpanel/#g' \
-        -e 's#/run/php/fleetbot-#/run/php/fleetpanel-#g' \
-        -e 's#/var/log/nginx/fleetbot-#/var/log/nginx/fleetpanel-#g' \
-        -e 's#^\[fleetbot-#[fleetpanel-#' \
-        -e 's#Managed by Fleetbot#Managed by FleetPanel#' "$1"
-  }
-  for f in /etc/nginx/sites-available/fleetbot-*.conf; do
-    [[ -e $f ]] || continue
-    if [[ ${f##*/} == fleetbot-panel.conf ]]; then
-      rm -f "$f" /etc/nginx/sites-enabled/fleetbot-panel.conf   # rewritten below under the new name
-      continue
-    fi
-    new="/etc/nginx/sites-available/fleetpanel-${f##*/fleetbot-}"
-    enabled=false
-    if [[ -L /etc/nginx/sites-enabled/${f##*/} ]]; then enabled=true; fi
-    rename_refs "$f" > "$new"
-    rm -f "/etc/nginx/sites-enabled/${f##*/}" "$f"
-    if [[ $enabled == true ]]; then ln -sfn "$new" "/etc/nginx/sites-enabled/${new##*/}"; fi
-  done
-  for f in /etc/php/*/fpm/pool.d/fleetbot-*.conf /etc/php/*/fpm/pool.d/fleetbot-*.conf.disabled; do
-    [[ -e $f ]] || continue
-    new="$(dirname "$f")/fleetpanel-${f##*/fleetbot-}"
-    rename_refs "$f" > "$new"
-    rm -f "$f"
-  done
-  if [[ -f /etc/nginx/conf.d/fleetbot.conf ]]; then mv /etc/nginx/conf.d/fleetbot.conf /etc/nginx/conf.d/fleetpanel.conf; fi
-
-  mv "$OLD_DIR" "$FLEET_DIR"
-  if [[ -d /etc/fleetbot && ! -e /etc/fleetpanel ]]; then mv /etc/fleetbot /etc/fleetpanel; fi
-
-  # Renaming keeps the UID/GID, so file ownership and ACLs stay valid.
-  if id -u fleetbot >/dev/null 2>&1 && ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
-    usermod -l "$SERVICE_USER" -d "$FLEET_DIR" fleetbot
-    groupmod -n "$SERVICE_USER" fleetbot 2>/dev/null || true
-  fi
-  while IFS=: read -r user _ _ _ _ home _; do
-    if [[ $user == fb-* && $home == "$OLD_DIR"/* ]]; then usermod -d "$FLEET_DIR/${home#"$OLD_DIR"/}" "$user"; fi
-  done < /etc/passwd
-
-  rm -f /etc/sudoers.d/fleetbot /usr/local/sbin/fleetbot-helper /usr/local/bin/fleetbot
-  rm -rf "$FLEET_DIR/app.new" "$FLEET_DIR/app.prev" "$FLEET_DIR/app.failed"
-
-  if nginx -t >/dev/null 2>&1 && "php-fpm$PHP_VER" -t >/dev/null 2>&1; then
-    systemctl reload "php${PHP_VER}-fpm"
-    systemctl reload nginx
-  else
-    warn "nginx or php-fpm rejected the migrated configuration; run 'nginx -t' and 'php-fpm$PHP_VER -t'."
-  fi
-  info "Migration done: /opt/fleetbot -> $FLEET_DIR, user fleetbot -> $SERVICE_USER, command fleetbot -> fleetpanel"
-}
-if [[ -d $OLD_DIR && ! -e $FLEET_DIR ]]; then migrate_from_fleetbot; fi
 
 # ---------------------------------------------------------------------------
 info "Creating service user and directories"
@@ -221,7 +153,7 @@ else
   ADMIN_USER="${FLEETPANEL_ADMIN_USER:-}"
   if [[ -z $ADMIN_USER ]]; then ask ADMIN_USER "Administrator username [admin]: " "admin"; fi
   RAND="$(openssl rand -base64 30 | tr -dc 'A-Za-z0-9')"
-  ADMIN_PASS="Fb-${RAND:0:22}"
+  ADMIN_PASS="Fp-${RAND:0:22}"
   printf '%s\n' "$ADMIN_PASS" | "${CLI[@]}" create-admin "$ADMIN_USER" --role Owner >/dev/null
 fi
 

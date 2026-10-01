@@ -19,9 +19,6 @@ web panel and a CLI.
 
 > **Status: v0.3 (pre-release).** Web panel, provisioning, CLI and updates are tested on a real
 > Ubuntu 24.04 server with MirzaBot and Faoxima. See the [changelog](CHANGELOG.md) and the [roadmap](#roadmap).
->
-> **Formerly Fleetbot.** Upgrading a Fleetbot install? Re-run the installer below: it migrates bots,
-> data and settings in place (see [Upgrading from Fleetbot](docs/installation.md#upgrading-from-fleetbot)).
 
 ---
 
@@ -41,7 +38,7 @@ then prints the panel URL and a one-time password. Details and non-interactive o
 
 - **Re-runnable:** running it again updates packages and configuration without losing data.
 - **Leaves existing services alone:** it never edits or deletes existing nginx sites, databases or
-  certificates; FleetPanel only adds its own `fleetpanel-*` files and `fb_*` databases. An existing
+  certificates; FleetPanel only adds its own `fleetpanel-*` files and `fp_*` databases. An existing
   MySQL/MariaDB server is reused.
 - **No default passwords:** the first Owner gets a random password that is shown once and not stored.
 - **Privilege separation:** the panel runs as the unprivileged `fleetpanel` user; a single allowlisted

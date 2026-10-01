@@ -20,7 +20,7 @@ readonly NGINX_ENABLED=/etc/nginx/sites-enabled
 
 readonly RE_SLUG='^[a-z][a-z0-9-]{1,27}[a-z0-9]$'
 readonly RE_DOMAIN='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
-readonly RE_DB_IDENT='^fb_[a-z0-9_]{3,29}$'
+readonly RE_DB_IDENT='^fp_[a-z0-9_]{3,29}$'
 readonly RE_HOOK='^[A-Za-z0-9_.-]{1,64}(/[A-Za-z0-9_.-]{1,64}){0,3}$'
 readonly RE_SECRET='^[A-Za-z0-9_-]{32,256}$'
 readonly RE_DB_PASSWORD='^[A-Za-z0-9]{24,128}$'
@@ -48,7 +48,7 @@ php_version() {
   printf '%s' "$v"
 }
 
-instance_user() { printf 'fb-%s' "$1"; }
+instance_user() { printf 'fp-%s' "$1"; }
 instance_dir() { printf '%s/%s' "$INSTANCES_DIR" "$1"; }
 pool_file() { printf '/etc/php/%s/fpm/pool.d/fleetpanel-%s.conf' "$2" "$1"; }
 vhost_file() { printf '%s/fleetpanel-%s.conf' "$NGINX_AVAILABLE" "$1"; }

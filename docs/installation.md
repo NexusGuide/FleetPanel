@@ -64,29 +64,6 @@ See [cli.md](cli.md#update) for how updates and rollback work, and `fleetpanel c
 `main` and a pinned release. Updates do not install new system packages; the [changelog](../CHANGELOG.md)
 lists any that a release needs.
 
-## Upgrading from Fleetbot
-
-FleetPanel was called **Fleetbot** up to v0.2. `fleetbot update` cannot install FleetPanel (it stops with
-a message and changes nothing). Re-run the installer instead:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/main/install.sh | sudo bash
-```
-
-It detects `/opt/fleetbot` and migrates it in place:
-
-| Before (Fleetbot) | After (FleetPanel) |
-| --- | --- |
-| `/opt/fleetbot`, `/etc/fleetbot` | `/opt/fleetpanel`, `/etc/fleetpanel` |
-| user `fleetbot` | user `fleetpanel` (same UID, so file ownership and ACLs stay valid) |
-| `fleetbot` command, `fleetbot.service`, `fleetbot-helper` | `fleetpanel`, `fleetpanel.service`, `fleetpanel-helper` |
-| nginx/PHP-FPM files `fleetbot-<slug>.conf`, sockets `/run/php/fleetbot-<slug>.sock` | `fleetpanel-<slug>.conf`, `/run/php/fleetpanel-<slug>.sock` |
-
-Bots keep their files, databases (`fb_*`), Linux users (`fb-*`), certificates and webhooks; they are briefly
-unavailable while PHP-FPM and nginx reload. The panel database, administrators, sessions and master key move
-with `/opt/fleetbot`. The current panel domain is offered as the default. Before migrating, take a
-control-plane backup (`sudo fleetbot backup`) and copy it off the server.
-
 ## Troubleshooting
 
 | Symptom | What to do |

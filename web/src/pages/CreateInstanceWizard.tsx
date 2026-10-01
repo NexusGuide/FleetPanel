@@ -235,7 +235,7 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
               ['Slug', form.slug],
               ['Bot token', `${form.bot_token.trim().split(':')[0]}:••••••`],
               ['Admin Telegram ID', form.admin_telegram_id.trim()],
-              ['Database', `fb_${form.slug.replace(/-/g, '_')}`],
+              ['Database', `fp_${form.slug.replace(/-/g, '_')}`],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-4 px-3 py-2">
                 <dt className="text-slate-500">{k}</dt>

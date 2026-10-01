@@ -49,9 +49,9 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 
 ## Isolation on the host
 
-- Each instance has its own Linux user `fb-<slug>` and PHP-FPM pool with
+- Each instance has its own Linux user `fp-<slug>` and PHP-FPM pool with
   `open_basedir = <instance dir>:/tmp`, `display_errors off`.
-- `instance-perms` (helper): files owned by `fb-<slug>`, `chmod u=rwX,g=rX,o=`; ACLs grant the
+- `instance-perms` (helper): files owned by `fp-<slug>`, `chmod u=rwX,g=rX,o=`; ACLs grant the
   `fleetpanel` user read/write and `www-data` read; `config.php` is explicitly unreadable to `www-data`.
 - nginx vhost per instance: denies dotfiles, `*.sql|log|ini|env|bak|sh|lock|md|json`, `error_log` files,
   `config.php`, `config/`, `vendor/`, `db/`, `logs/`. The webhook location requires the instance's secret

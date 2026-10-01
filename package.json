@@ -9,7 +9,6 @@
     "node": ">=20"
   },
   "scripts": {
-    "prebuild": "node scripts/guard-legacy-update.mjs",
     "build": "tsc -p tsconfig.json && vite build --config web/vite.config.ts",
     "build:server": "tsc -p tsconfig.json",
     "build:web": "vite build --config web/vite.config.ts",

@@ -85,7 +85,7 @@ describe('paths and identifiers', () => {
   });
 
   it('derives MySQL identifiers that fit the 32-char limit', () => {
-    expect(dbIdentFor('demo-bot')).toBe('fb_demo_bot');
+    expect(dbIdentFor('demo-bot')).toBe('fp_demo_bot');
     expect(dbIdentFor(`a${'b'.repeat(28)}`).length).toBeLessThanOrEqual(32);
   });
 

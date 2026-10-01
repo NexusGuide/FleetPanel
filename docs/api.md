@@ -5,7 +5,7 @@ The web panel uses this API; you can script against it too. All responses are JS
 ## Authentication
 
 1. `POST /api/auth/login` with `{"username": "...", "password": "..."}`. The response sets the
-   `fb_session` cookie (HttpOnly) and returns `csrf_token`.
+   `fp_session` cookie (HttpOnly) and returns `csrf_token`.
 2. Send the cookie with every request, and `X-CSRF-Token: <csrf_token>` with every `POST`, `PATCH` and
    `DELETE`. Requests with a foreign `Origin` header are rejected.
 3. `GET /api/auth/me` returns the current user and a fresh `csrf_token` (or `{"authenticated": false}`).

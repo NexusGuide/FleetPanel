@@ -18,7 +18,7 @@ on GitHub rather than a public issue. Include the version (`fleetpanel version`)
 | --- | --- | --- |
 | Control plane (`dist/server.js`) | `fleetpanel` | Its own data, instance files (via ACL), backups |
 | `fleetpanel-helper` | root (via one sudoers rule) | Only the allowlisted commands below, with re-validated arguments |
-| Each bot (PHP-FPM pool) | `fb-<slug>` | Its own directory only (`open_basedir`) |
+| Each bot (PHP-FPM pool) | `fp-<slug>` | Its own directory only (`open_basedir`) |
 | nginx | `www-data` | Reads bot files to serve static assets; `config.php` is unreadable to it |
 
 Helper commands: `instance-create`, `instance-perms`, `instance-enable`, `instance-disable`,
