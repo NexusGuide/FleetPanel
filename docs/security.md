@@ -39,7 +39,7 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 
 - `src/security/validation.ts`: zod schemas with allowlist regexes for slugs, domains, bot tokens,
   Telegram ids and usernames; unknown fields are rejected.
-- `deploy/fleetbot-helper` re-validates every argument with equivalent regexes as root.
+- `deploy/fleetpanel-helper` re-validates every argument with equivalent regexes as root.
 - `src/security/php.ts`: `phpString()` produces single-quoted PHP literals (escapes `\` then `'`) and
   rejects control characters. Provider configs are filled only through it (`src/providers/index.ts`).
 - `src/system/exec.ts`: the only way to run programs; `execFile` with an argument array, a fixed `PATH`,
@@ -52,7 +52,7 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 - Each instance has its own Linux user `fb-<slug>` and PHP-FPM pool with
   `open_basedir = <instance dir>:/tmp`, `display_errors off`.
 - `instance-perms` (helper): files owned by `fb-<slug>`, `chmod u=rwX,g=rX,o=`; ACLs grant the
-  `fleetbot` user read/write and `www-data` read; `config.php` is explicitly unreadable to `www-data`.
+  `fleetpanel` user read/write and `www-data` read; `config.php` is explicitly unreadable to `www-data`.
 - nginx vhost per instance: denies dotfiles, `*.sql|log|ini|env|bak|sh|lock|md|json`, `error_log` files,
   `config.php`, `config/`, `vendor/`, `db/`, `logs/`. The webhook location requires the instance's secret
   (header or `?secret=`, per provider) and does not log query-string secrets.
@@ -64,8 +64,8 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 - Instance backups (`src/services/backups.ts`): tar of the instance directory, a `mysqldump` and a
   manifest; mode 600; SHA-256 recorded and verified before restore; archive entries are checked against
   an allowlist (no absolute paths, no `..`) before extraction; a pre-restore safety backup is taken.
-- Control-plane backups (`src/cli.ts`, `bin/fleetbot`): SQLite online-backup copy of the database plus
-  the master key, mode 600, in `/opt/fleetbot/backups`. They must be stored off the server.
+- Control-plane backups (`src/cli.ts`, `bin/fleetpanel`): SQLite online-backup copy of the database plus
+  the master key, mode 600, in `/opt/fleetpanel/backups`. They must be stored off the server.
 
 ## Audit log
 

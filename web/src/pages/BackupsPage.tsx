@@ -197,7 +197,7 @@ export function BackupsPage({
         title="Backups"
         description={
           <>
-            Stored on this server under <span className="font-mono">/opt/fleetbot/backups</span>. The newest manual backups
+            Stored on this server under <span className="font-mono">/opt/fleetpanel/backups</span>. The newest manual backups
             per instance are kept; safety backups are never pruned automatically. Copy them off-site for disaster recovery.
           </>
         }

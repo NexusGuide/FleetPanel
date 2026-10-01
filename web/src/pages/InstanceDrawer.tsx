@@ -162,7 +162,7 @@ export function InstanceDrawer({
                   </Row>
                   <Row label="Database user">{inst.db_user}</Row>
                   <Row label="Linux user">fb-{inst.slug}</Row>
-                  <Row label="Files">/opt/fleetbot/instances/{inst.slug}</Row>
+                  <Row label="Files">/opt/fleetpanel/instances/{inst.slug}</Row>
                   <Row label="Created">{formatDate(inst.created_at)}</Row>
                   <Row label="Last change">
                     <Time value={inst.updated_at} />

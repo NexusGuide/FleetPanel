@@ -1,6 +1,6 @@
 {
-  "name": "fleetbot",
-  "version": "0.2.0",
+  "name": "fleetpanel",
+  "version": "0.3.0",
   "private": true,
   "description": "Secure control plane for hosting multiple Telegram bot instances on one Linux server",
   "license": "MIT",
@@ -9,6 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "prebuild": "node scripts/guard-legacy-update.mjs",
     "build": "tsc -p tsconfig.json && vite build --config web/vite.config.ts",
     "build:server": "tsc -p tsconfig.json",
     "build:web": "vite build --config web/vite.config.ts",

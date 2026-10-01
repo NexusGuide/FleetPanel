@@ -6,9 +6,9 @@ Thanks for helping. Bug reports, fixes and new providers are welcome.
 
 Open an issue with:
 
-- `fleetbot version` and the output of `sudo fleetbot doctor`
+- `fleetpanel version` and the output of `sudo fleetpanel doctor`
 - what you did, what you expected and what happened
-- for instance problems, the `last_error` shown in the panel and `sudo fleetbot logs 100`
+- for instance problems, the `last_error` shown in the panel and `sudo fleetpanel logs 100`
 
 Remove bot tokens, passwords and domains you do not want public. Security issues: see
 [SECURITY.md](SECURITY.md) and do **not** open a public issue.
@@ -38,8 +38,8 @@ src/            control plane (Express, SQLite) — see docs/architecture.md
   security/     validation, crypto, passwords, RBAC, PHP escaping
   system/       exec, root-helper client, composer/php/mysql toolchain
 web/            React panel (Vite + Tailwind)
-deploy/         fleetbot-helper (the only root component)
-bin/fleetbot    operator CLI
+deploy/         fleetpanel-helper (the only root component)
+bin/fleetpanel  operator CLI
 install.sh      installer
 tests/          vitest suites and fixtures
 ```
@@ -48,13 +48,13 @@ tests/          vitest suites and fixtures
 
 - **No shell strings.** Run programs only through `src/system/exec.ts` with argument arrays.
 - **Validate twice.** Inputs are validated in `src/security/validation.ts` and again in
-  `deploy/fleetbot-helper`; keep the regexes in sync.
+  `deploy/fleetpanel-helper`; keep the regexes in sync.
 - **Never show fake data.** The panel must only display values that come from the server.
 - **Database changes** are new entries appended to `MIGRATIONS` in `src/db.ts`; never edit a released one.
 - **Shell scripts** must pass `bash -n` and `shellcheck -S error` and keep LF line endings
   (`.gitattributes` enforces this).
 - Add or update tests with every behaviour change, and update the docs and `CHANGELOG.md`.
-- Anything touching provisioning, the helper, the installer or `fleetbot update` should also be tried
+- Anything touching provisioning, the helper, the installer or `fleetpanel update` should also be tried
   on a real Ubuntu/Debian server; say in the pull request what you tested there.
 
 ## Pull requests

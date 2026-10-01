@@ -86,7 +86,7 @@ const MIGRATIONS: string[] = [
   `,
 ];
 
-export function openDb(file: string = path.join(config.dataDir, 'fleetbot.db')): DB {
+export function openDb(file: string = path.join(config.dataDir, 'fleetpanel.db')): DB {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const db = new Database(file);
   db.pragma('journal_mode = WAL');

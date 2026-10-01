@@ -15,7 +15,7 @@ let dummyHash: Promise<string> | undefined;
  */
 export async function verifyPassword(hash: string | null, password: string): Promise<boolean> {
   if (hash === null) {
-    dummyHash ??= hashPassword('fleetbot-timing-equalizer');
+    dummyHash ??= hashPassword('fleetpanel-timing-equalizer');
     await argon2.verify(await dummyHash, password).catch(() => false);
     return false;
   }

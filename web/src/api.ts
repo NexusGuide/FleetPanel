@@ -1,4 +1,4 @@
-// Typed client for the Fleetbot REST API. Same origin only: the session lives in an
+// Typed client for the FleetPanel REST API. Same origin only: the session lives in an
 // HttpOnly cookie and every write echoes the per-session CSRF token.
 
 export type Role = 'Owner' | 'Admin' | 'Manager' | 'Support' | 'Viewer';
@@ -132,7 +132,7 @@ const FRIENDLY: Record<string, string> = {
   permission_denied: 'Your role does not allow this action.',
   rate_limited: 'Too many requests. Wait a moment and try again.',
   not_found: 'Not found.',
-  internal_error: 'The server hit an unexpected error. Check `sudo fleetbot logs`.',
+  internal_error: 'The server hit an unexpected error. Check `sudo fleetpanel logs`.',
   bad_request: 'The request was malformed.',
 };
 
@@ -192,7 +192,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       cache: 'no-store',
     });
   } catch {
-    throw new ApiError(0, 'network_error', 'Cannot reach the Fleetbot server. Check your connection.');
+    throw new ApiError(0, 'network_error', 'Cannot reach the FleetPanel server. Check your connection.');
   }
 
   const data = (await res.json().catch(() => null)) as unknown;

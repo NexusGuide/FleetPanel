@@ -33,5 +33,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: bash -n install.sh && bash -n deploy/fleetbot-helper && bash -n bin/fleetbot
-      - run: shellcheck -S error install.sh deploy/fleetbot-helper bin/fleetbot
+      - run: bash -n install.sh && bash -n deploy/fleetpanel-helper && bash -n bin/fleetpanel
+      - run: shellcheck -S error install.sh deploy/fleetpanel-helper bin/fleetpanel

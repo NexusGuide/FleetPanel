@@ -241,7 +241,7 @@ export function AdminsPage({ me }: { me: Me }) {
         </dl>
         <p className="text-[11px] text-slate-500 mt-3">
           At least one active Owner must always remain. Locked out? Run{' '}
-          <code className="font-mono text-slate-300">sudo fleetbot reset-password &lt;user&gt;</code> on the server.
+          <code className="font-mono text-slate-300">sudo fleetpanel reset-password &lt;user&gt;</code> on the server.
         </p>
       </Card>
 

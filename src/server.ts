@@ -46,7 +46,7 @@ function main(): void {
   instances.recoverInterrupted();
 
   const admins = (db.prepare('SELECT COUNT(*) AS n FROM admins').get() as { n: number }).n;
-  if (admins === 0) log.warn('No administrators exist yet. Create one with: sudo fleetbot create-admin <username>');
+  if (admins === 0) log.warn('No administrators exist yet. Create one with: sudo fleetpanel create-admin <username>');
 
   const app = createApp({
     db,
@@ -62,7 +62,7 @@ function main(): void {
   setInterval(() => sessions.purgeExpired(), 10 * 60_000).unref();
 
   const server = app.listen(config.port, config.host, () => {
-    log.info(`Fleetbot ${VERSION} listening on ${config.host}:${config.port}`);
+    log.info(`FleetPanel ${VERSION} listening on ${config.host}:${config.port}`);
   });
 
   const shutdown = (signal: string) => {

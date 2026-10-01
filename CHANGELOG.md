@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.3.0
+
+### Renamed: Fleetbot is now FleetPanel
+
+The repository moved to [NexusGuide/FleetPanel](https://github.com/NexusGuide/FleetPanel) and every name
+follows: the `fleetpanel` command, `fleetpanel.service`, `/opt/fleetpanel`, `/etc/fleetpanel`, the
+`fleetpanel` service user, `fleetpanel-helper`, and the `fleetpanel-*` nginx/PHP-FPM files. Installer
+variables are now `FLEETPANEL_*`.
+
+### Upgrading from Fleetbot v0.2
+Do **not** use `fleetbot update` (it refuses this version and changes nothing). Take a backup, then re-run
+the installer, which migrates everything in place; bots keep running with their data:
+
+```bash
+sudo fleetbot backup
+curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/main/install.sh | sudo bash
+```
+
+Details: [docs/installation.md](docs/installation.md#upgrading-from-fleetbot).
+
+### Changed
+- Re-running the installer offers the current panel domain as the default.
+- The installer header now states the real requirement (Ubuntu 24.04+ / Debian 12+, for PHP 8.2).
+
 ## v0.2.0 (2026-10-01)
 
 First release with a web panel. Pre-release: provisioning, the panel and `fleetbot update`

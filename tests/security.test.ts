@@ -79,9 +79,9 @@ describe('createInstanceSchema', () => {
 
 describe('paths and identifiers', () => {
   it('keeps instance directories inside the instances root', () => {
-    expect(instanceDir('/opt/fleetbot/instances', 'demo-bot')).toBe(path.resolve('/opt/fleetbot/instances/demo-bot'));
-    expect(() => instanceDir('/opt/fleetbot/instances', '../x')).toThrow();
-    expect(() => instanceDir('/opt/fleetbot/instances', 'a/b')).toThrow();
+    expect(instanceDir('/opt/fleetpanel/instances', 'demo-bot')).toBe(path.resolve('/opt/fleetpanel/instances/demo-bot'));
+    expect(() => instanceDir('/opt/fleetpanel/instances', '../x')).toThrow();
+    expect(() => instanceDir('/opt/fleetpanel/instances', 'a/b')).toThrow();
   });
 
   it('derives MySQL identifiers that fit the 32-char limit', () => {

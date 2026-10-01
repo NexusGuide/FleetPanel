@@ -114,7 +114,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => Promise<void> }) {
   const [mobileNav, setMobileNav] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
     try {
-      return window.localStorage.getItem('fleetbot.sidebar') === 'collapsed';
+      return window.localStorage.getItem('fleetpanel.sidebar') === 'collapsed';
     } catch {
       return false;
     }
@@ -150,7 +150,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => Promise<void> }) {
   const toggleCollapsed = () => {
     setCollapsed((c) => {
       try {
-        window.localStorage.setItem('fleetbot.sidebar', c ? 'expanded' : 'collapsed');
+        window.localStorage.setItem('fleetpanel.sidebar', c ? 'expanded' : 'collapsed');
       } catch {
         /* storage unavailable: keep the in-memory value */
       }
@@ -215,9 +215,9 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => Promise<void> }) {
               {mobileNav ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
             </button>
             <span className="md:hidden flex items-center gap-1.5 text-xs font-semibold text-white">
-              <Bot className="w-4 h-4 text-blue-400" /> Fleetbot
+              <Bot className="w-4 h-4 text-blue-400" /> FleetPanel
             </span>
-            <span className="hidden md:inline text-xs text-slate-500 font-mono">Fleetbot</span>
+            <span className="hidden md:inline text-xs text-slate-500 font-mono">FleetPanel</span>
             <span className="hidden md:inline text-slate-700">/</span>
             <span className="hidden md:inline text-xs text-slate-200 font-mono truncate">{title}</span>
           </div>

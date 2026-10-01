@@ -32,7 +32,7 @@ const BASE_ENV: Record<string, string> = {
 
 /**
  * Runs a program with an argument array. There is deliberately no shell variant:
- * nothing in Fleetbot ever builds a command line out of strings.
+ * nothing in FleetPanel ever builds a command line out of strings.
  */
 export function run(cmd: string, args: readonly string[], opts: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
