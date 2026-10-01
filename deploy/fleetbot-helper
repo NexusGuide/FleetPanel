@@ -77,7 +77,9 @@ require_instance_dir() {
 
 # instance-perms SLUG
 # Bot files belong to the per-instance user; the control plane gets access
-# through an ACL, nginx only gets directory traversal (no file reads).
+# through an ACL. nginx (www-data) may read files so it can serve the bot's
+# static assets (CSS, JS, images) and redirect /dir to /dir/; the vhost denies
+# secrets and data files, and config.php is additionally unreadable to it.
 cmd_instance_perms() {
   need_args $# 1
   local slug="$1" user dir
@@ -88,7 +90,8 @@ cmd_instance_perms() {
   ensure_instance_user "$user" "$dir"
   chown -R -P "$user:$user" "$dir"
   chmod -R u=rwX,g=rX,o= "$dir"
-  setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:X,d:u:$WEB_USER:X" "$dir"
+  setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:rX,d:u:$WEB_USER:rX" "$dir"
+  if [[ -f $dir/config.php && ! -L $dir/config.php ]]; then setfacl -m "u:$WEB_USER:---" "$dir/config.php"; fi
 }
 
 # instance-create SLUG DOMAIN WEBHOOK_PATH AUTH   (stdin: webhook secret)
