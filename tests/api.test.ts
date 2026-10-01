@@ -16,13 +16,19 @@ import { BackupService } from '../src/services/backups.js';
 import { InstanceService } from '../src/services/instances.js';
 import type { PrivilegedOps } from '../src/system/helper.js';
 import type { TelegramClient } from '../src/services/telegram.js';
+import { fakeClone, fakeToolchain } from './fixtures.js';
 
 const noop = async (): Promise<void> => undefined;
+const tools = fakeToolchain();
+const createdSites: Array<{ slug: string; auth: string }> = [];
+const webhooks: string[] = [];
 const ops: PrivilegedOps = {
   createDatabase: noop,
   dropDatabase: noop,
   fixPermissions: noop,
-  createInstance: noop,
+  createInstance: async (slug, _domain, _hook, auth) => {
+    createdSites.push({ slug, auth });
+  },
   issueCertificate: noop,
   enableInstance: noop,
   disableInstance: noop,
@@ -30,7 +36,9 @@ const ops: PrivilegedOps = {
 };
 const telegram: TelegramClient = {
   getMe: async () => ({ id: 1, username: 'demo_bot' }),
-  setWebhook: noop,
+  setWebhook: async (_token, url) => {
+    webhooks.push(url);
+  },
   deleteWebhook: noop,
 };
 
@@ -116,9 +124,8 @@ beforeAll(async () => {
     telegram,
     backups,
     instancesDir,
-    git: async (_url, _ref, dest) => {
-      fs.mkdirSync(dest, { recursive: true });
-    },
+    git: fakeClone,
+    tools,
   });
   const app = createApp({ db, sessions: new SessionStore(db), audit, instances, backups, cookieSecure: false, trustProxy: false, dataRoot: tmp });
   server = app.listen(0, '127.0.0.1');
@@ -206,9 +213,22 @@ describe('API security', () => {
     }
     expect(status).toBe('running');
 
-    const config = fs.readFileSync(path.join(tmp, 'instances', 'demo-bot', 'config.php'), 'utf8');
+    const dir = path.join(tmp, 'instances', 'demo-bot');
+    const config = fs.readFileSync(path.join(dir, 'config.php'), 'utf8');
     expect(config).toContain(`$APIKEY = '${TOKEN}';`);
     expect(config).toContain("$adminnumber = '42';");
+    expect(config).toContain("$dbhost = 'localhost';");
+    expect(config).not.toMatch(/\{[a-z_]+\}/i);
+
+    // MirzaBot's full install: dependencies, no reachable web installer, schema, matching webhook secret.
+    expect(tools.calls.composer).toContain(dir);
+    expect(fs.existsSync(path.join(dir, 'install'))).toBe(false);
+    expect(tools.calls.php).toContain(path.join(dir, 'table.php'));
+    const secretUpdate = tools.calls.sql.find((q) => q.startsWith('UPDATE setting SET webhook_secret'));
+    const secret = /webhook_secret = '([A-Za-z0-9_-]+)'/.exec(secretUpdate ?? '')?.[1];
+    expect(secret).toBeTruthy();
+    expect(webhooks).toContain(`https://bot.example.com/index.php?secret=${secret}`);
+    expect(createdSites).toContainEqual({ slug: 'demo-bot', auth: 'query' });
 
     const duplicate = await request('POST', '/api/instances', {
       headers: { cookie, 'x-csrf-token': csrf },
@@ -240,6 +260,41 @@ describe('API security', () => {
     }
     expect(instance.last_error).toBeNull();
     expect(instance.status).toBe('running');
+
+    // Faoxima: config filled in place, secret via TELEGRAM_WEBHOOK_SECRET + header check, installer removed.
+    const dir = path.join(tmp, 'instances', 'shop-bot');
+    const config = fs.readFileSync(path.join(dir, 'config.php'), 'utf8');
+    expect(config).toContain("$domainhosts                = 'my-shop.example.com';");
+    expect(config).toContain("$dbhost     = 'localhost';");
+    expect(config).toMatch(/define\('TELEGRAM_WEBHOOK_SECRET', '[A-Za-z0-9_-]{32,}'\);/);
+    expect(fs.existsSync(path.join(dir, 'installer'))).toBe(false);
+    expect(tools.calls.composer).not.toContain(dir);
+    expect(createdSites).toContainEqual({ slug: 'shop-bot', auth: 'header' });
+    expect(webhooks).toContain('https://my-shop.example.com/index.php');
+  });
+
+  it('names the failing step and allows reprovisioning a running instance', async () => {
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    const list = await request('GET', '/api/instances', { headers: { cookie } });
+    const target = list.body.instances.find((i: { slug: string }) => i.slug === 'shop-bot');
+
+    const original = tools.runPhp;
+    tools.runPhp = async () => {
+      throw new Error('PHP Fatal error: boom');
+    };
+    try {
+      const res = await request('POST', `/api/instances/${target.id}/reprovision`, { headers: { cookie, 'x-csrf-token': csrf } });
+      expect(res.status).toBe(202);
+      let instance = res.body.instance;
+      for (let i = 0; i < 50 && instance.status === 'provisioning'; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        instance = (await request('GET', `/api/instances/${target.id}`, { headers: { cookie } })).body.instance;
+      }
+      expect(instance.status).toBe('error');
+      expect(instance.last_error).toBe('Creating database tables (table.php): PHP Fatal error: boom');
+    } finally {
+      tools.runPhp = original;
+    }
   });
 
   it('refuses to let an administrator disable their own account', async () => {
@@ -257,7 +312,7 @@ describe('API security', () => {
   it('audits failed operations with the client IP', async () => {
     const { cookie, csrf } = await login('owner', 'Owner-Password-1');
     const list = await request('GET', '/api/instances', { headers: { cookie } });
-    const id = list.body.instances[0].id as number;
+    const id = list.body.instances.find((i: { status: string }) => i.status === 'running').id as number;
     // mysqldump is not available in the test environment, so the backup fails for real.
     const backup = await request('POST', `/api/instances/${id}/backups`, { headers: { cookie, 'x-csrf-token': csrf } });
     expect(backup.status).toBeGreaterThanOrEqual(400);

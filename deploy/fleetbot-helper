@@ -91,15 +91,25 @@ cmd_instance_perms() {
   setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:X,d:u:$WEB_USER:X" "$dir"
 }
 
-# instance-create SLUG DOMAIN WEBHOOK_PATH   (stdin: webhook secret)
+# instance-create SLUG DOMAIN WEBHOOK_PATH AUTH   (stdin: webhook secret)
+# AUTH is how Telegram proves a webhook call, matching what the bot itself checks:
+#   header  X-Telegram-Bot-Api-Secret-Token
+#   query   ?secret=... in the webhook URL
 cmd_instance_create() {
-  need_args $# 3
-  local slug="$1" domain="$2" hook="$3" secret user dir php pool vhost link
+  need_args $# 4
+  local slug="$1" domain="$2" hook="$3" auth="$4" secret user dir php pool vhost link guard
   check_slug "$slug"
   check_domain "$domain"
   check_hook "$hook"
   secret="$(read_stdin_value)"
   [[ $secret =~ $RE_SECRET ]] || die "invalid webhook secret"
+  case "$auth" in
+    header) guard="if (\$http_x_telegram_bot_api_secret_token != \"$secret\") { return 403; }" ;;
+    # The secret is in the URL: keep it out of the access log.
+    query) guard="if (\$arg_secret != \"$secret\") { return 403; }
+        access_log off;" ;;
+    *) die "invalid webhook auth mode" ;;
+  esac
 
   user="$(instance_user "$slug")"
   dir="$(instance_dir "$slug")"
@@ -142,14 +152,15 @@ server {
     access_log /var/log/nginx/fleetbot-$slug.access.log;
     error_log /var/log/nginx/fleetbot-$slug.error.log;
 
-    # Never serve dotfiles, dumps, logs, configs or dependencies
+    # Never serve dotfiles, dumps, logs, data files, configs or dependencies
     location ~ /\.(?!well-known/) { deny all; }
-    location ~* \.(sql|log|ini|env|bak|sh|lock|md)\$ { deny all; }
-    location ~ ^/(config\.php|config/|vendor/) { deny all; }
+    location ~* \.(sql|log|ini|env|bak|sh|lock|md|json)\$ { deny all; }
+    location ~ (^|/)error_log\$ { deny all; }
+    location ~ ^/(config\.php|config/|vendor/|db/|logs/) { deny all; }
 
-    # Telegram webhook: only requests carrying our secret token reach PHP
+    # Telegram webhook: only requests carrying our secret reach PHP
     location = /$hook {
-        if (\$http_x_telegram_bot_api_secret_token != "$secret") { return 403; }
+        $guard
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/fleetbot-$slug.sock;
     }

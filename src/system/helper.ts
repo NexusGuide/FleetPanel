@@ -1,11 +1,12 @@
 import { run } from './exec.js';
+import type { WebhookAuth } from '../providers/index.js';
 
 /** Everything that needs root. Implemented by deploy/fleetbot-helper. */
 export interface PrivilegedOps {
   createDatabase(dbName: string, dbUser: string, password: string): Promise<void>;
   dropDatabase(dbName: string, dbUser: string): Promise<void>;
   fixPermissions(slug: string): Promise<void>;
-  createInstance(slug: string, domain: string, webhookPath: string, webhookSecret: string): Promise<void>;
+  createInstance(slug: string, domain: string, webhookPath: string, webhookAuth: WebhookAuth, webhookSecret: string): Promise<void>;
   issueCertificate(domain: string): Promise<void>;
   enableInstance(slug: string): Promise<void>;
   disableInstance(slug: string): Promise<void>;
@@ -34,8 +35,8 @@ export class SudoHelper implements PrivilegedOps {
     return this.call(['instance-perms', slug]);
   }
 
-  createInstance(slug: string, domain: string, webhookPath: string, webhookSecret: string): Promise<void> {
-    return this.call(['instance-create', slug, domain, webhookPath], webhookSecret);
+  createInstance(slug: string, domain: string, webhookPath: string, webhookAuth: WebhookAuth, webhookSecret: string): Promise<void> {
+    return this.call(['instance-create', slug, domain, webhookPath, webhookAuth], webhookSecret);
   }
 
   issueCertificate(domain: string): Promise<void> {

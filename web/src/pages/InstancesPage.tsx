@@ -38,16 +38,17 @@ export function InstanceActionButtons({
           Stop
         </Button>
       )}
-      {can('instances.create') && inst.status === 'error' && (
+      {/* Prominent after a failure; in the detail panel it is also offered as a repair for working instances. */}
+      {can('instances.create') && (inst.status === 'error' || (!compact && !transitional)) && (
         <Button
           size={size}
-          variant="primary"
+          variant={inst.status === 'error' ? 'primary' : 'secondary'}
           icon={<RotateCcw className="w-3.5 h-3.5" />}
           disabled={busy}
           loading={actions.isPending(inst.id, 'reprovision')}
           onClick={() => void actions.reprovision(inst)}
         >
-          Reprovision
+          {inst.status === 'error' ? 'Reprovision' : 'Repair'}
         </Button>
       )}
       {can('backups.create') && (inst.status === 'running' || inst.status === 'stopped') && (

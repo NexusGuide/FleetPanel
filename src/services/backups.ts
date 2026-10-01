@@ -1,13 +1,13 @@
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import os from 'node:os';
 import path from 'node:path';
 import type { DB } from '../db.js';
 import type { ActorRef, AuditLog } from '../audit.js';
 import type { SecretStore } from '../secrets.js';
 import type { PrivilegedOps } from '../system/helper.js';
 import { run } from '../system/exec.js';
+import { withClientConfig } from '../system/toolchain.js';
 import { randomToken } from '../security/crypto.js';
 import { HttpError, errorMessage } from '../errors.js';
 import { instanceDir, type InstanceRow } from './instances.js';
@@ -71,17 +71,8 @@ export class BackupService {
     return row;
   }
 
-  /** Writes a throwaway my.cnf so the DB password never appears in argv. */
-  private async withClientConfig<T>(inst: InstanceRow, fn: (cnfPath: string) => Promise<T>): Promise<T> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fleetbot-'));
-    const cnf = path.join(dir, 'client.cnf');
-    try {
-      const password = this.d.secrets.get(inst.id, 'db_password');
-      await fs.writeFile(cnf, `[client]\nuser=${inst.db_user}\npassword=${password}\nhost=localhost\n`, { mode: 0o600 });
-      return await fn(cnf);
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+  private withClientConfig<T>(inst: InstanceRow, fn: (cnfPath: string) => Promise<T>): Promise<T> {
+    return withClientConfig({ dbUser: inst.db_user, password: this.d.secrets.get(inst.id, 'db_password') }, fn);
   }
 
   async create(inst: InstanceRow, kind: BackupKind, actor: ActorRef = 'system'): Promise<BackupRow> {

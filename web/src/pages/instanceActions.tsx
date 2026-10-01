@@ -76,10 +76,18 @@ export function useInstanceActions(opts: {
     const ok = await confirm({
       title: `Reprovision ${inst.slug}?`,
       body: (
-        <p>
-          The instance files, nginx site and PHP pool are removed and rebuilt from a fresh copy of the bot's code. The
-          database and stored secrets are kept. Use this to recover from a failed install.
-        </p>
+        <>
+          <p>
+            The instance files, nginx site and PHP pool are removed and rebuilt from a fresh copy of the bot's code, then
+            the install steps run again. The <b>database and stored secrets are kept</b>. Use this to recover from a failed
+            install or a bot that does not respond.
+          </p>
+          {inst.status !== 'error' && (
+            <p className="text-amber-300">
+              Files the bot saved inside its own folder are replaced. Take a backup first if you are unsure.
+            </p>
+          )}
+        </>
       ),
       confirmLabel: 'Reprovision',
     });

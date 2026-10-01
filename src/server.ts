@@ -7,6 +7,7 @@ import { SessionStore } from './http/sessions.js';
 import { createApp } from './http/app.js';
 import { SudoHelper } from './system/helper.js';
 import { gitClone } from './system/git.js';
+import { systemToolchain } from './system/toolchain.js';
 import { TelegramApi } from './services/telegram.js';
 import { BackupService } from './services/backups.js';
 import { InstanceService } from './services/instances.js';
@@ -39,6 +40,7 @@ function main(): void {
     telegram: new TelegramApi(),
     backups,
     git: gitClone,
+    tools: systemToolchain,
     instancesDir: config.instancesDir,
   });
   instances.recoverInterrupted();

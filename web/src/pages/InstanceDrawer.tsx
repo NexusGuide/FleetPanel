@@ -7,9 +7,10 @@ import { useInstanceActions } from './instanceActions';
 import { BackupTable } from './BackupsPage';
 
 const STEPS = [
-  'Clone the bot code',
-  'Write its config',
-  'Create the MySQL database',
+  'Download the bot code',
+  'Write config.php',
+  'Install PHP dependencies (composer)',
+  'Create the MySQL database and tables',
   'Set file permissions',
   'Create PHP pool + nginx site',
   'Issue the TLS certificate',

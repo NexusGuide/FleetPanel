@@ -4,6 +4,7 @@ import type { DB } from '../db.js';
 import type { ActorRef, AuditLog } from '../audit.js';
 import type { SecretStore } from '../secrets.js';
 import type { PrivilegedOps } from '../system/helper.js';
+import type { Toolchain } from '../system/toolchain.js';
 import type { TelegramClient } from './telegram.js';
 import type { BackupRow, BackupService } from './backups.js';
 import { PROVIDERS, type ProviderId } from '../providers/index.js';
@@ -53,7 +54,24 @@ export interface InstanceServiceDeps {
   telegram: TelegramClient;
   backups: BackupService;
   git: GitClone;
+  tools: Toolchain;
   instancesDir: string;
+}
+
+/** Runs one provisioning step and prefixes failures with its name, so last_error says where it broke. */
+async function step<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    throw new Error(`${label}: ${errorMessage(err)}`);
+  }
+}
+
+async function exists(file: string): Promise<boolean> {
+  return fs.access(file).then(
+    () => true,
+    () => false,
+  );
 }
 
 const TIMESTAMP = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
@@ -163,10 +181,10 @@ export class InstanceService {
 
   reprovision(id: number, actor: ActorRef): InstanceRow {
     const inst = this.get(id);
-    if (inst.status !== 'error') {
-      throw new HttpError(409, 'invalid_state', 'Only instances in the error state can be reprovisioned.');
+    // Also allowed for running/stopped instances: it repairs a broken install. The database is kept.
+    if (inst.status === 'provisioning' || inst.status === 'deleting' || this.busy.has(id)) {
+      throw new HttpError(409, 'instance_busy', 'Another operation is running on this instance. Try again shortly.');
     }
-    if (this.busy.has(id)) throw new HttpError(409, 'instance_busy', 'Instance is busy.');
     this.setStatus(id, 'provisioning');
     this.provisionInBackground(id, actor, true);
     return this.get(id);
@@ -187,32 +205,58 @@ export class InstanceService {
       const dbPassword = this.d.secrets.get(id, 'db_password');
       const webhookSecret = this.d.secrets.get(id, 'webhook_secret');
 
-      if (cleanFirst) await this.d.ops.removeInstance(inst.slug);
-      await this.d.git(provider.repoUrl, provider.ref, dir);
+      const ctx = {
+        domain: inst.domain,
+        dbName: inst.db_name,
+        dbUser: inst.db_user,
+        dbPassword,
+        botToken,
+        botUsername: inst.bot_username ?? '',
+        adminTelegramId: inst.admin_telegram_id,
+        webhookSecret,
+      };
+      const db = { dbName: inst.db_name, dbUser: inst.db_user, password: dbPassword };
+      const inside = (rel: string): string => {
+        const p = path.resolve(dir, rel);
+        if (!p.startsWith(dir + path.sep)) throw new Error(`provider path ${rel} escapes the instance directory`);
+        return p;
+      };
 
-      const configPath = path.resolve(dir, provider.configFile);
-      if (!configPath.startsWith(dir + path.sep)) throw new Error('provider config path escapes the instance directory');
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        provider.renderConfig({
-          domain: inst.domain,
-          dbName: inst.db_name,
-          dbUser: inst.db_user,
-          dbPassword,
-          botToken,
-          botUsername: inst.bot_username ?? '',
-          adminTelegramId: inst.admin_telegram_id,
-        }),
-        { mode: 0o640 },
+      if (cleanFirst) await step('Removing the previous install', () => this.d.ops.removeInstance(inst.slug));
+      await step(`Downloading ${provider.displayName}`, () => this.d.git(provider.repoUrl, provider.ref, dir));
+
+      await step('Writing config.php', async () => {
+        const configPath = inside(provider.configFile);
+        const template = await fs.readFile(configPath, 'utf8');
+        await fs.writeFile(configPath, provider.renderConfig(template, ctx), { mode: 0o640 });
+        await fs.chmod(configPath, 0o640);
+      });
+
+      if ((await exists(inside('composer.json'))) && !(await exists(inside('vendor/autoload.php')))) {
+        await step('Installing PHP dependencies (composer install)', () => this.d.tools.composerInstall(dir));
+        if (!(await exists(inside('vendor/autoload.php')))) {
+          throw new Error('Installing PHP dependencies (composer install): vendor/autoload.php is still missing');
+        }
+      }
+      // The upstream web installer could reconfigure the bot; it must never be reachable.
+      await fs.rm(inside(provider.installerDir), { recursive: true, force: true });
+
+      await step('Creating the MySQL database', () => this.d.ops.createDatabase(inst.db_name, inst.db_user, dbPassword));
+      await step(`Creating database tables (${provider.schemaScript})`, () => this.d.tools.runPhp(dir, provider.schemaScript));
+      await step('Configuring the bot', async () => {
+        const post = provider.postSchemaSql?.(ctx);
+        if (post) await this.d.tools.sql(db, post);
+        const out = (await this.d.tools.sql(db, provider.readyCheckSql(ctx))).trim();
+        if (!(Number.parseInt(out, 10) > 0)) throw new Error('the database schema was not created as expected');
+      });
+
+      await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));
+      await step('Creating the PHP pool and nginx site', () =>
+        this.d.ops.createInstance(inst.slug, inst.domain, provider.webhookPath, provider.webhookAuth, webhookSecret),
       );
-      await fs.chmod(configPath, 0o640);
-
-      await this.d.ops.createDatabase(inst.db_name, inst.db_user, dbPassword);
-      await this.d.ops.fixPermissions(inst.slug);
-      await this.d.ops.createInstance(inst.slug, inst.domain, provider.webhookPath, webhookSecret);
-      await this.d.ops.issueCertificate(inst.domain);
-      await this.d.telegram.setWebhook(botToken, `https://${inst.domain}/${provider.webhookPath}`, webhookSecret);
+      await step('Issuing the TLS certificate', () => this.d.ops.issueCertificate(inst.domain));
+      // Last, so it overrides any webhook the schema script registered on its own.
+      await step('Registering the Telegram webhook', () => this.d.telegram.setWebhook(botToken, provider.webhookUrl(ctx), webhookSecret));
 
       this.setStatus(id, 'running');
       this.d.audit.write({ actor, action: 'INSTANCE_PROVISION', resource: 'instance', resourceId: id, status: 'SUCCESS' });
