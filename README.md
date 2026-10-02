@@ -87,7 +87,7 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 
 ```text
 ╭──────────────────────────────────────────╮
-│ FleetPanel v0.3.1  ·  channel main       │
+│ FleetPanel v0.3.2  ·  channel main       │
 ╰──────────────────────────────────────────╯
   Panel: ● running
 
@@ -122,10 +122,10 @@ Full reference: [docs/cli.md](docs/cli.md).
 ### 🩺 System doctor
 
 ```text
-FleetPanel doctor — v0.3.1, channel main
+FleetPanel doctor — v0.3.2, channel main
 
   [PASS] Panel service is running
-  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.3.1"})
+  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.3.2"})
   [PASS] nginx configuration is valid
   [PASS] php-fpm 8.3 configuration is valid
   [PASS] MySQL/MariaDB is reachable

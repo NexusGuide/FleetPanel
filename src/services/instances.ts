@@ -232,17 +232,26 @@ export class InstanceService {
         await fs.chmod(configPath, 0o640);
       });
 
-      if ((await exists(inside('composer.json'))) && !(await exists(inside('vendor/autoload.php')))) {
-        await step('Installing PHP dependencies (composer install)', () => this.d.tools.composerInstall(dir));
-        if (!(await exists(inside('vendor/autoload.php')))) {
-          throw new Error('Installing PHP dependencies (composer install): vendor/autoload.php is still missing');
-        }
-      }
       // The upstream web installer could reconfigure the bot; it must never be reachable.
       await fs.rm(inside(provider.installerDir), { recursive: true, force: true });
 
       await step('Creating the MySQL database', () => this.d.ops.createDatabase(inst.db_name, inst.db_user, dbPassword));
-      await step(`Creating database tables (${provider.schemaScript})`, () => this.d.tools.runPhp(dir, provider.schemaScript));
+      // From here on the bot's own code runs (Composer, its schema script): give the files to the
+      // bot's Linux user first and run those steps as that user, never as the control plane.
+      await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));
+      if ((await exists(inside('composer.json'))) && !(await exists(inside('vendor/autoload.php')))) {
+        await step('Installing PHP dependencies (composer install)', async () => {
+          await this.d.ops.runComposer(inst.slug);
+          await this.d.ops.fixPermissions(inst.slug);
+        });
+        if (!(await exists(inside('vendor/autoload.php')))) {
+          throw new Error('Installing PHP dependencies (composer install): vendor/autoload.php is still missing');
+        }
+      }
+      await step(`Creating database tables (${provider.schemaScript})`, async () => {
+        await this.d.ops.runPhp(inst.slug, provider.schemaScript);
+        await this.d.ops.fixPermissions(inst.slug);
+      });
       await step('Configuring the bot', async () => {
         const post = provider.postSchemaSql?.(ctx);
         if (post) await this.d.tools.sql(db, post);
@@ -250,7 +259,6 @@ export class InstanceService {
         if (!(Number.parseInt(out, 10) > 0)) throw new Error('the database schema was not created as expected');
       });
 
-      await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));
       await step('Creating the PHP pool and nginx site', () =>
         this.d.ops.createInstance(inst.slug, inst.domain, provider.webhookPath, provider.webhookAuth, webhookSecret),
       );

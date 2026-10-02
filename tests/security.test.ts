@@ -8,7 +8,9 @@ import { can, permissionsFor } from '../src/security/rbac.js';
 import { maskSecrets } from '../src/security/mask.js';
 import { passwordPolicyErrors } from '../src/security/passwords.js';
 import { dbIdentFor, instanceDir } from '../src/services/instances.js';
-import { assertSafeArchiveEntries } from '../src/services/backups.js';
+import { assertSafeArchiveEntries, assertSafeArchiveLinks, assertSafeSqlDump } from '../src/services/backups.js';
+import { clientKey } from '../src/http/rateLimit.js';
+import type { Request } from 'express';
 
 const TOKEN = `123456789:${'A'.repeat(35)}`;
 const valid = { slug: 'demo-bot', provider: 'mirza', domain: 'bot.example.com', bot_token: TOKEN, admin_telegram_id: '42' };
@@ -127,5 +129,39 @@ describe('misc', () => {
   it('enforces password policy', () => {
     expect(passwordPolicyErrors('short')).not.toHaveLength(0);
     expect(passwordPolicyErrors('Correct-Horse-Battery-9')).toHaveLength(0);
+  });
+});
+
+describe('restore hardening', () => {
+  it('refuses mysql client commands smuggled into a dump (e.g. via a table name)', () => {
+    const header = '/*M!999999\- enable the sandbox mode */\n-- MariaDB dump\nCREATE TABLE `t` (`id` int);\n';
+    expect(() => assertSafeSqlDump(`${header}INSERT INTO \`t\` VALUES (1);\n`)).not.toThrow();
+    expect(() => assertSafeSqlDump(`${header}-- Table structure for table \`x\n\\! id\n`)).toThrow(/client command on line 5/);
+    expect(() => assertSafeSqlDump(`${header}  system touch /tmp/pwned\n`)).toThrow();
+  });
+
+  it('refuses archive links that leave the instance directory', () => {
+    const ok = ['drwxr-x--- u/g 0 2026-10-01 12:00 demo/', 'lrwxrwxrwx u/g 0 2026-10-01 12:00 demo/latest -> img/a.png'];
+    expect(() => assertSafeArchiveLinks(ok, 'demo')).not.toThrow();
+    expect(() => assertSafeArchiveLinks(['lrwxrwxrwx u/g 0 2026-10-01 12:00 demo/x -> /etc/passwd'], 'demo')).toThrow();
+    expect(() => assertSafeArchiveLinks(['lrwxrwxrwx u/g 0 2026-10-01 12:00 demo/x -> ../other/config.php'], 'demo')).toThrow();
+    expect(() => assertSafeArchiveLinks(['hrw-r--r-- u/g 0 2026-10-01 12:00 demo/b link to other/a'], 'demo')).toThrow();
+    expect(() => assertSafeArchiveLinks(['crw-r--r-- u/g 1,3 2026-10-01 12:00 demo/null'], 'demo')).toThrow();
+  });
+});
+
+describe('rate-limit client keys', () => {
+  const key = (ip: string) => clientKey({ ip } as Request);
+
+  it('groups an IPv6 /64 so rotating addresses does not reset limits', () => {
+    expect(key('2001:db8:1:2:aaaa::1')).toBe(key('2001:db8:1:2:ffff:1:2:3'));
+    expect(key('2001:db8:1:2::5')).toBe('2001:db8:1:2::/64');
+    expect(key('2001:db8:1:3::5')).not.toBe(key('2001:db8:1:2::5'));
+    expect(key('::1')).toBe('0:0:0:0::/64');
+  });
+
+  it('keeps IPv4 addresses (also when IPv4-mapped) as they are', () => {
+    expect(key('203.0.113.7')).toBe('203.0.113.7');
+    expect(key('::ffff:203.0.113.7')).toBe('203.0.113.7');
   });
 });

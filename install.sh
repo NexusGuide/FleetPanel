@@ -116,7 +116,9 @@ chown -R root:root "$APP_DIR"
 info "Building (this can take a minute)"
 (
   cd "$APP_DIR"
-  npm ci --no-audit --no-fund --loglevel=error
+  # Install scripts run as root here: allow only the native modules that need them.
+  npm ci --ignore-scripts --no-audit --no-fund --loglevel=error
+  npm rebuild argon2 better-sqlite3 esbuild --loglevel=error
   npm run build --silent
   npm prune --omit=dev --no-audit --no-fund --loglevel=error
 )

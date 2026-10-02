@@ -123,10 +123,51 @@ cmd_instance_perms() {
   dir="$(instance_dir "$slug")"
   require_instance_dir "$dir"
   ensure_instance_user "$user" "$dir"
-  chown -R -P "$user:$user" "$dir"
-  chmod -R u=rwX,g=rX,o= "$dir"
-  setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:rX,d:u:$WEB_USER:rX" "$dir"
-  if [[ -f $dir/config.php && ! -L $dir/config.php ]]; then setfacl -m "u:$WEB_USER:---" "$dir/config.php"; fi
+  # The instances directory is writable by the control-plane user, so the path could be
+  # swapped for a symlink after the check above (chmod follows symlink arguments). Work
+  # from inside the directory instead: once it is our cwd, renaming the path is harmless.
+  cd -P -- "$dir" || die "cannot enter instance directory"
+  [[ "$(pwd -P)" == "$dir" ]] || die "instance directory moved during permission fix"
+  chown -R -P "$user:$user" .
+  chmod -R u=rwX,g=rX,o= .
+  setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:rX,d:u:$WEB_USER:rX" .
+  if [[ -f config.php && ! -L config.php ]]; then setfacl -m "u:$WEB_USER:---" config.php; fi
+}
+
+# instance-run SLUG composer | SLUG php SCRIPT.php
+# Runs a bot's own install steps as the bot's Linux user, never as the control plane:
+# a compromised upstream project or Composer package then only reaches that one bot.
+cmd_instance_run() {
+  local slug="${1:-}" task="${2:-}" user dir home rc
+  check_slug "$slug"
+  user="$(instance_user "$slug")"
+  dir="$(instance_dir "$slug")"
+  require_instance_dir "$dir"
+  id -u "$user" >/dev/null 2>&1 || die "instance user does not exist (run instance-perms first)"
+  local cmd=()
+  case "$task" in
+    composer)
+      need_args $# 2
+      # No scripts or plugins: dependency packages cannot run code at install time.
+      cmd=(composer install --no-dev --no-scripts --no-plugins --optimize-autoloader --prefer-dist
+           --no-progress --no-interaction "--working-dir=$dir")
+      ;;
+    php)
+      need_args $# 3
+      [[ $3 =~ ^[A-Za-z0-9_-]{1,64}\.php$ ]] || die "invalid script name"
+      [[ -f $dir/$3 && ! -L $dir/$3 ]] || die "script $3 not found in the instance"
+      cmd=(php "$3")
+      ;;
+    *) die "invalid task" ;;
+  esac
+  home="$(mktemp -d)"
+  chown "$user:$user" "$home"
+  rc=0
+  # stdout goes to stderr too: PHP CLI prints fatal errors on stdout, and the panel shows stderr.
+  (cd -P -- "$dir" && timeout 900 runuser -u "$user" -- env -i PATH="$PATH" LANG=C.UTF-8 HOME="$home" \
+    COMPOSER_HOME="$home" COMPOSER_NO_INTERACTION=1 "${cmd[@]}") >&2 || rc=$?
+  rm -rf -- "$home"
+  [[ $rc -eq 0 ]] || die "$task failed with exit code $rc"
 }
 
 # instance-create SLUG DOMAIN WEBHOOK_PATH AUTH   (stdin: webhook secret)
@@ -196,10 +237,13 @@ server {
     client_max_body_size 32m;
     access_log /var/log/nginx/fleetpanel-$slug.access.log;
     error_log /var/log/nginx/fleetpanel-$slug.error.log;
+    # A symlink planted by a compromised bot must not expose other bots' files.
+    disable_symlinks if_not_owner from=\$document_root;
 
-    # Never serve dotfiles, dumps, logs, data files, configs or dependencies
+    # Never serve dotfiles, dumps, logs, data files, archives, exports, configs or dependencies.
+    # The bots write database backups (.zip) and exports (.xlsx/.csv) inside their own folder.
     location ~ /\.(?!well-known/) { deny all; }
-    location ~* \.(sql|log|ini|env|bak|sh|lock|md|json)\$ { deny all; }
+    location ~* \.(sql|log|ini|env|bak|sh|lock|md|json|txt|zip|tar|gz|tgz|bz2|xz|7z|rar|db|sqlite|csv|xls|xlsx|pem|key)\$ { deny all; }
     location ~ (^|/)error_log\$ { deny all; }
     location ~ ^/(config\.php|config/|vendor/|db/|logs/) { deny all; }
 
@@ -342,6 +386,7 @@ main() {
   case "$cmd" in
     instance-create)  cmd_instance_create "$@" ;;
     instance-perms)   cmd_instance_perms "$@" ;;
+    instance-run)     cmd_instance_run "$@" ;;
     instance-enable)  cmd_instance_enable "$@" ;;
     instance-disable) cmd_instance_disable "$@" ;;
     instance-remove)  cmd_instance_remove "$@" ;;
