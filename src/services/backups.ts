@@ -44,6 +44,44 @@ export function assertSafeArchiveEntries(entries: string[], slug: string): void 
   }
 }
 
+/**
+ * Symlinks and hard links in an instance archive must stay inside the instance directory.
+ * `verbose` is the output of `tar -tvzf` (GNU format: "lrwx... name -> target",
+ * "hrw-... name link to target").
+ */
+export function assertSafeArchiveLinks(verbose: string[], slug: string): void {
+  const escapes = (target: string) => target.startsWith('/') || target.split('/').includes('..');
+  for (const line of verbose) {
+    const type = line.charAt(0);
+    if (type === 'l') {
+      const target = line.slice(line.lastIndexOf(' -> ') + 4);
+      if (line.lastIndexOf(' -> ') < 0 || escapes(target)) throw new Error(`Unsafe symlink in archive: ${line}`);
+    } else if (type === 'h') {
+      const at = line.lastIndexOf(' link to ');
+      const target = line.slice(at + 9);
+      if (at < 0 || escapes(target) || !(target === slug || target.startsWith(`${slug}/`))) {
+        throw new Error(`Unsafe hard link in archive: ${line}`);
+      }
+    } else if (type === 'c' || type === 'b' || type === 'p') {
+      throw new Error(`Device or FIFO in archive: ${line}`);
+    }
+  }
+}
+
+/**
+ * The mysql client executes its own commands found in the input ("\\! cmd", "system cmd"),
+ * so a crafted table name in a dump could run shell commands as the control-plane user.
+ * Restores also pass --binary-mode (which disables them); this is the second line of defence.
+ */
+export function assertSafeSqlDump(sql: string): void {
+  const lines = sql.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(\\|system\s)/i.test(lines[i] ?? '')) {
+      throw new Error(`The database dump contains a mysql client command on line ${i + 1}; refusing to import it.`);
+    }
+  }
+}
+
 export interface BackupServiceDeps {
   db: DB;
   audit: AuditLog;
@@ -155,6 +193,8 @@ export class BackupService {
     }
     const { stdout } = await run('tar', ['-tzf', file], { timeoutMs: 300_000 });
     assertSafeArchiveEntries(stdout.split('\n'), inst.slug);
+    const listing = await run('tar', ['-tvzf', file], { timeoutMs: 300_000 });
+    assertSafeArchiveLinks(listing.stdout.split('\n'), inst.slug);
 
     const safety = await this.create(inst, 'pre-restore', actor);
     const dir = instanceDir(this.d.instancesDir, inst.slug);
@@ -163,13 +203,16 @@ export class BackupService {
     let swapped = false;
     try {
       await run('tar', ['-xzf', file, '-C', work, '--no-same-owner', '--no-same-permissions'], { timeoutMs: 900_000 });
+      // Check the dump before touching the running instance.
+      const sql = await fs.readFile(path.join(work, 'database.sql'), 'utf8');
+      assertSafeSqlDump(sql);
       await this.d.ops.disableInstance(inst.slug);
       await fs.rename(dir, previous);
       swapped = true;
       await fs.rename(path.join(work, inst.slug), dir);
-      const sql = await fs.readFile(path.join(work, 'database.sql'), 'utf8');
       await this.withClientConfig(inst, (cnf) =>
-        run('mysql', [`--defaults-extra-file=${cnf}`, inst.db_name], { input: sql, timeoutMs: 900_000 }),
+        // --binary-mode turns off mysql client commands (\\!, system, ...) in non-interactive input.
+        run('mysql', [`--defaults-extra-file=${cnf}`, '--binary-mode', inst.db_name], { input: sql, timeoutMs: 900_000 }),
       );
       await this.d.ops.fixPermissions(inst.slug);
       await this.d.ops.enableInstance(inst.slug);

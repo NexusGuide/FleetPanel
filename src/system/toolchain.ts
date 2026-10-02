@@ -9,12 +9,8 @@ export interface DbCredentials {
   password: string;
 }
 
-/** Unprivileged commands provisioning runs as the fleetpanel user (no root needed). */
+/** SQL the control plane runs against an instance's own database. */
 export interface Toolchain {
-  /** `composer install` for projects that do not ship vendor/. */
-  composerInstall(dir: string): Promise<void>;
-  /** Runs a PHP script with the CLI, from inside the instance directory. */
-  runPhp(dir: string, script: string): Promise<void>;
   /** Runs SQL as the instance's own database user and returns tab-separated output without headers. */
   sql(db: DbCredentials, sql: string): Promise<string>;
 }
@@ -33,24 +29,6 @@ export async function withClientConfig<T>(db: Omit<DbCredentials, 'dbName'>, fn:
 }
 
 export const systemToolchain: Toolchain = {
-  async composerInstall(dir) {
-    // The service user's home is not writable, so Composer gets a private scratch home.
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'fleetpanel-composer-'));
-    try {
-      await run(
-        'composer',
-        ['install', '--no-dev', '--optimize-autoloader', '--prefer-dist', '--no-progress', '--no-interaction', `--working-dir=${dir}`],
-        { timeoutMs: 900_000, env: { HOME: home, COMPOSER_HOME: home, COMPOSER_NO_INTERACTION: '1' } },
-      );
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  },
-
-  async runPhp(dir, script) {
-    await run('php', [script], { cwd: dir, timeoutMs: 300_000 });
-  },
-
   async sql(db, sql) {
     const { stdout } = await withClientConfig(db, (cnf) =>
       run('mysql', [`--defaults-extra-file=${cnf}`, '--batch', '--skip-column-names', db.dbName], { input: sql, timeoutMs: 120_000 }),

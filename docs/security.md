@@ -11,7 +11,9 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
   `public_id` identifies sessions in the API. Idle (2 h) and absolute (24 h) expiry are checked on every
   request; disabled accounts lose their sessions immediately. Logging in always creates a new session
   (session-fixation defence). Changing a password signs out all other sessions.
-- `src/http/routes/auth.ts`: login is rate limited per IP (30 / 15 min) and per IP+username (5 / 15 min).
+- `src/http/routes/auth.ts`: login is rate limited per client (30 / 15 min), per client+username
+  (5 / 15 min) and per username alone (50 / 15 min), so rotating addresses cannot speed up guessing one
+  account. `src/http/rateLimit.ts` keys IPv6 clients by their /64.
 
 ## Request protection
 
@@ -53,9 +55,17 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
   `open_basedir = <instance dir>:/tmp`, `display_errors off`.
 - `instance-perms` (helper): files owned by `fp-<slug>`, `chmod u=rwX,g=rX,o=`; ACLs grant the
   `fleetpanel` user read/write and `www-data` read; `config.php` is explicitly unreadable to `www-data`.
-- nginx vhost per instance: denies dotfiles, `*.sql|log|ini|env|bak|sh|lock|md|json`, `error_log` files,
-  `config.php`, `config/`, `vendor/`, `db/`, `logs/`. The webhook location requires the instance's secret
-  (header or `?secret=`, per provider) and does not log query-string secrets.
+  It works from inside the instance directory (`cd -P`, then relative paths), so swapping the path for a
+  symlink during the run cannot redirect `chmod` elsewhere.
+- `instance-run` (helper): the bot's install steps run as `fp-<slug>` via `runuser` with a clean
+  environment and a private `HOME`; Composer runs with `--no-scripts --no-plugins`. Code from the bot's
+  repository or its dependencies therefore never runs as the control-plane user.
+- nginx vhost per instance: `disable_symlinks if_not_owner`; denies dotfiles,
+  `*.sql|log|ini|env|bak|sh|lock|md|json|txt|zip|tar|gz|tgz|bz2|xz|7z|rar|db|sqlite|csv|xls|xlsx|pem|key`,
+  `error_log` files, `config.php`, `config/`, `vendor/`, `db/`, `logs/` (the bots write their own database
+  backups and exports inside their folder). The webhook location requires the instance's secret (header
+  or `?secret=`, per provider) and does not log query-string secrets.
+- `instance-create` refuses a domain that another enabled nginx site already serves.
 - Generated pool and vhost files are validated with `php-fpm -t` and `nginx -t` before anything is
   enabled; on failure they are removed and the tool's error is reported.
 
@@ -63,7 +73,10 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 
 - Instance backups (`src/services/backups.ts`): tar of the instance directory, a `mysqldump` and a
   manifest; mode 600; SHA-256 recorded and verified before restore; archive entries are checked against
-  an allowlist (no absolute paths, no `..`) before extraction; a pre-restore safety backup is taken.
+  an allowlist (no absolute paths, no `..`), symlinks and hard links must stay inside the instance, and
+  devices/FIFOs are refused, all before extraction; a pre-restore safety backup is taken. The dump is
+  rejected if any line is a `mysql` client command (`\!`, `system`), and imported with `--binary-mode`,
+  which disables client commands: a table name crafted by a compromised bot cannot run shell commands.
 - Control-plane backups (`src/cli.ts`, `bin/fleetpanel`): SQLite online-backup copy of the database plus
   the master key, mode 600, in `/opt/fleetpanel/backups`. They must be stored off the server.
 

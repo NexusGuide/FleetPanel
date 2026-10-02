@@ -48,6 +48,21 @@ export async function fakeClone(url: string, _ref: string | undefined, dest: str
   }
 }
 
+/** Stand-ins for the helper's instance-run commands (Composer and PHP run as the bot's user). */
+export function fakeRunner(calls: ToolCalls, instancesDir: () => string) {
+  return {
+    async runComposer(slug: string): Promise<void> {
+      const dir = path.join(instancesDir(), slug);
+      calls.composer.push(dir);
+      fs.mkdirSync(path.join(dir, 'vendor'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'vendor', 'autoload.php'), '<?php');
+    },
+    async runPhp(slug: string, script: string): Promise<void> {
+      calls.php.push(path.join(instancesDir(), slug, script));
+    },
+  };
+}
+
 export interface ToolCalls {
   composer: string[];
   php: string[];
@@ -57,14 +72,6 @@ export interface ToolCalls {
 export function fakeToolchain(calls: ToolCalls = { composer: [], php: [], sql: [] }): Toolchain & { calls: ToolCalls } {
   return {
     calls,
-    async composerInstall(dir) {
-      calls.composer.push(dir);
-      fs.mkdirSync(path.join(dir, 'vendor'), { recursive: true });
-      fs.writeFileSync(path.join(dir, 'vendor', 'autoload.php'), '<?php');
-    },
-    async runPhp(dir, script) {
-      calls.php.push(path.join(dir, script));
-    },
     async sql(_db, sql) {
       calls.sql.push(sql);
       return '1\n';

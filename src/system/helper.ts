@@ -11,16 +11,28 @@ export interface PrivilegedOps {
   enableInstance(slug: string): Promise<void>;
   disableInstance(slug: string): Promise<void>;
   removeInstance(slug: string): Promise<void>;
+  /** `composer install` (no scripts, no plugins) as the instance's own Linux user. */
+  runComposer(slug: string): Promise<void>;
+  /** Runs one of the bot's PHP scripts with the CLI as the instance's own Linux user. */
+  runPhp(slug: string, script: string): Promise<void>;
 }
 
 export class SudoHelper implements PrivilegedOps {
   constructor(private readonly helperPath: string) {}
 
-  private async call(args: string[], stdin?: string): Promise<void> {
+  private async call(args: string[], stdin?: string, timeoutMs = 300_000): Promise<void> {
     await run('sudo', ['-n', this.helperPath, ...args], {
       input: stdin === undefined ? undefined : `${stdin}\n`,
-      timeoutMs: 300_000,
+      timeoutMs,
     });
+  }
+
+  runComposer(slug: string): Promise<void> {
+    return this.call(['instance-run', slug, 'composer'], undefined, 960_000);
+  }
+
+  runPhp(slug: string, script: string): Promise<void> {
+    return this.call(['instance-run', slug, 'php', script], undefined, 960_000);
   }
 
   createDatabase(dbName: string, dbUser: string, password: string): Promise<void> {

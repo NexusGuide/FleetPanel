@@ -21,8 +21,10 @@ on GitHub rather than a public issue. Include the version (`fleetpanel version`)
 | Each bot (PHP-FPM pool) | `fp-<slug>` | Its own directory only (`open_basedir`) |
 | nginx | `www-data` | Reads bot files to serve static assets; `config.php` is unreadable to it |
 
-Helper commands: `instance-create`, `instance-perms`, `instance-enable`, `instance-disable`,
+Helper commands: `instance-create`, `instance-perms`, `instance-run`, `instance-enable`, `instance-disable`,
 `instance-remove`, `db-create`, `db-drop`, `cert-issue`. Every argument is re-validated as root.
+`instance-run` executes a bot's own install steps (Composer without scripts or plugins, its schema
+script) as that bot's Linux user, never as the control plane.
 Secrets are passed on stdin, never argv.
 
 ### Controls
@@ -32,13 +34,17 @@ Secrets are passed on stdin, never argv.
 - **Sessions:** stored as SHA-256 hashes; `HttpOnly`, `SameSite=Strict`, `Secure` over TLS; 2 h idle /
   24 h absolute. Users can only list and revoke their own sessions.
 - **CSRF:** per-session token on every authenticated write, plus an `Origin` check.
-- **Rate limiting:** keyed on the real client IP (`trust proxy` = loopback only).
+- **Rate limiting:** keyed on the real client IP (`trust proxy` = loopback only), with IPv6 grouped
+  per /64; login is additionally limited per username regardless of the client address.
 - **Secrets at rest:** AES-256-GCM with per-record AAD. The server refuses to start if the master key is
   missing or readable by group/others. Decryption failures throw; they never fall back to ciphertext.
 - **Injection:** allowlist validation of slugs, domains, tokens and ids; generated PHP uses escaped
   single-quoted literals; no shell is ever invoked (`execFile` with argument arrays only).
 - **Telegram webhooks:** nginx rejects webhook calls without the instance's secret.
-- **Web installers** of the bot projects are deleted before a site goes live.
+- **Web installers** of the bot projects are deleted before a site goes live. Bot sites never serve
+  archives, exports or data files, and do not follow symlinks to files owned by someone else.
+- **Restores** import dumps with the `mysql` client's `--binary-mode` (no client commands) after
+  rejecting dumps that contain client commands, and reject archive links leaving the instance.
 - **Audit log:** append-only (UPDATE/DELETE blocked by SQLite triggers), including failures and client IP.
 - **Headers:** strict CSP (`script-src 'self'`), `frame-ancestors 'none'`, `X-Frame-Options: DENY`,
   `no-referrer`, HSTS over TLS.

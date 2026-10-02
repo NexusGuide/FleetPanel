@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.3.2
+
+Security release from a line-by-line audit. Upgrading is recommended; afterwards press **Repair** on each
+bot so its nginx site gets the new rules.
+
+### Security
+- **High:** restoring a backup fed the database dump to the `mysql` client, which runs its own commands
+  (`\!`, `system`). A table name crafted by a compromised bot could inject such a command into the dump
+  and run shell commands as the control-plane user on restore. Dumps containing client commands are now
+  refused, and imports use `--binary-mode`, which disables client commands.
+- **High:** a bot's install steps (`composer install` including dependency scripts, and its schema
+  script) ran as the control-plane user, so a compromised upstream project or package could take over the
+  panel. They now run as the bot's own Linux user through the root helper (`instance-run`), and Composer
+  runs with `--no-scripts --no-plugins`.
+- **High:** bot sites could serve files the bots write inside their folder, including MirzaBot's zipped
+  database backups and spreadsheet exports, to anyone guessing the name. Archives, exports and data files
+  are now denied.
+- **Medium:** a bot could plant a symlink to another bot's files and have nginx serve them. Bot sites now
+  use `disable_symlinks if_not_owner`, and restores refuse archive links leaving the instance.
+- **Medium:** `instance-perms` checked the instance path and then ran `chmod -R` on it; swapping the path
+  for a symlink in between could change permissions elsewhere on the system. It now works from inside the
+  directory.
+- **Medium:** login limits were keyed on the full client address, so rotating IPv6 addresses bypassed
+  them. IPv6 clients are grouped per /64 and each username has its own limit (50 attempts / 15 min).
+- **Medium:** install and update ran every npm package's install scripts as root. Only the three native
+  modules that need them (argon2, better-sqlite3, esbuild) are rebuilt now.
+- **Low:** `fleetpanel restore` (as root) did not check that the files in a control-plane backup were
+  regular files; a crafted archive could make it copy any file (e.g. via a symlink to /etc/shadow).
+
 ## v0.3.1
 
 ### Fixed

@@ -1,7 +1,7 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import type { AppDeps } from '../deps.js';
 import { requireAuth } from '../middleware.js';
-import { rateLimit } from '../rateLimit.js';
+import { clientKey, rateLimit } from '../rateLimit.js';
 import { SESSION_ABSOLUTE_MS, SESSION_COOKIE } from '../sessions.js';
 import { ah, authOf } from '../util.js';
 import { HttpError } from '../../errors.js';
@@ -19,21 +19,21 @@ interface AdminAuthRow {
 
 export function authRoutes(d: AppDeps): Router {
   const r = Router();
+  const usernameOf = (req: Request): string => {
+    const username = (req.body as { username?: unknown } | undefined)?.username;
+    return typeof username === 'string' ? username.toLowerCase().slice(0, 64) : '';
+  };
   const loginPerIp = rateLimit({ limit: 30, windowMs: 15 * 60_000 });
-  const loginPerUser = rateLimit({
-    limit: 5,
-    windowMs: 15 * 60_000,
-    key: (req) => {
-      const username = (req.body as { username?: unknown } | undefined)?.username;
-      return `${req.ip}|${typeof username === 'string' ? username.toLowerCase().slice(0, 64) : ''}`;
-    },
-  });
+  const loginPerUser = rateLimit({ limit: 5, windowMs: 15 * 60_000, key: (req) => `${clientKey(req)}|${usernameOf(req)}` });
+  // Independent of the client address, so rotating addresses cannot speed up guessing one account.
+  const loginPerAccount = rateLimit({ limit: 50, windowMs: 15 * 60_000, key: (req) => `acct|${usernameOf(req)}` });
   const sensitive = rateLimit({ limit: 10, windowMs: 5 * 60_000, key: (req) => `pw|${req.auth?.adminId ?? req.ip}` });
 
   r.post(
     '/login',
     loginPerIp,
     loginPerUser,
+    loginPerAccount,
     ah(async (req, res) => {
       const { username, password } = loginSchema.parse(req.body);
       const admin = d.db

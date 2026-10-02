@@ -93,7 +93,8 @@ build() {
   echo "Installing dependencies (can take a few minutes; the panel keeps running)..."
   (
     cd "$1" \
-      && npm ci --no-audit --no-fund --loglevel=error --prefer-offline \
+      && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error --prefer-offline \
+      && npm rebuild argon2 better-sqlite3 esbuild --loglevel=error \
       && npm run build --silent \
       && npm prune --omit=dev --no-audit --no-fund --loglevel=error
   ) || return 1
@@ -349,6 +350,11 @@ restore_control_plane() {
   RESTORE_WORK="$work"
   trap 'rm -rf "$RESTORE_WORK"' EXIT
   tar -xzf "$file" -C "$work" --no-same-owner
+  # Runs as root: a crafted archive could ship these names as symlinks (e.g. to /etc/shadow).
+  local f
+  for f in fleetpanel.db master.key manifest.json; do
+    [[ -f $work/$f && ! -L $work/$f ]] || die "$f in the backup is not a regular file"
+  done
   [[ "$(stat -c %s "$work/master.key")" == 32 ]] || die "the backup's master key is not 32 bytes"
 
   systemctl stop "$SERVICE"

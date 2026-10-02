@@ -16,7 +16,7 @@ import { BackupService } from '../src/services/backups.js';
 import { InstanceService } from '../src/services/instances.js';
 import type { PrivilegedOps } from '../src/system/helper.js';
 import type { TelegramClient } from '../src/services/telegram.js';
-import { fakeClone, fakeToolchain } from './fixtures.js';
+import { fakeClone, fakeRunner, fakeToolchain } from './fixtures.js';
 
 const noop = async (): Promise<void> => undefined;
 const tools = fakeToolchain();
@@ -33,6 +33,7 @@ const ops: PrivilegedOps = {
   enableInstance: noop,
   disableInstance: noop,
   removeInstance: noop,
+  ...fakeRunner(tools.calls, () => path.join(tmp, 'instances')),
 };
 const telegram: TelegramClient = {
   getMe: async () => ({ id: 1, username: 'demo_bot' }),
@@ -278,8 +279,8 @@ describe('API security', () => {
     const list = await request('GET', '/api/instances', { headers: { cookie } });
     const target = list.body.instances.find((i: { slug: string }) => i.slug === 'shop-bot');
 
-    const original = tools.runPhp;
-    tools.runPhp = async () => {
+    const original = ops.runPhp;
+    ops.runPhp = async () => {
       throw new Error('PHP Fatal error: boom');
     };
     try {
@@ -293,7 +294,7 @@ describe('API security', () => {
       expect(instance.status).toBe('error');
       expect(instance.last_error).toBe('Creating database tables (table.php): PHP Fatal error: boom');
     } finally {
-      tools.runPhp = original;
+      ops.runPhp = original;
     }
   });
 
