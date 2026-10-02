@@ -87,16 +87,16 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 
 ```text
 ╭──────────────────────────────────────────╮
-│ FleetPanel v0.3.2  ·  channel main       │
+│ FleetPanel v0.3.3  ·  channel main       │
 ╰──────────────────────────────────────────╯
   Panel: ● running
 
-  1) Status            6) Back up control plane
-  2) Doctor            7) Restore a backup
-  3) Logs              8) Update
-  4) Instances         9) Version / update channel
-  5) Backups          10) Restart panel
-                      11) Uninstall
+  1) Status            7) Restore a backup
+  2) Doctor            8) Update
+  3) Logs              9) Version / update channel
+  4) Instances        10) Restart panel
+  5) Backups          11) Firewall
+  6) Back up panel    12) Uninstall
   0) Exit
 ```
 
@@ -115,6 +115,7 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 | `fleetpanel admins` / `create-admin` / `reset-password` | Manage administrators from the server |
 | `fleetpanel version` / `channel [REF]` | Show the version; follow `main` or pin a release such as `v0.3.0` |
 | `fleetpanel update` | Build the channel's latest version and switch, with automatic rollback |
+| `fleetpanel firewall [enable\|disable]` | Optional ufw firewall: SSH, HTTP, HTTPS and the panel port stay open; `--block-ping` blocks ping |
 | `fleetpanel uninstall` | Remove FleetPanel; bots keep running unless you choose full purge |
 
 Full reference: [docs/cli.md](docs/cli.md).
@@ -122,10 +123,10 @@ Full reference: [docs/cli.md](docs/cli.md).
 ### 🩺 System doctor
 
 ```text
-FleetPanel doctor — v0.3.2, channel main
+FleetPanel doctor — v0.3.3, channel main
 
   [PASS] Panel service is running
-  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.3.2"})
+  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.3.3"})
   [PASS] nginx configuration is valid
   [PASS] php-fpm 8.3 configuration is valid
   [PASS] MySQL/MariaDB is reachable
@@ -138,9 +139,10 @@ FleetPanel doctor — v0.3.2, channel main
   [PASS] PHP 8.3.6 with required extensions
   [PASS] Composer is installed
   [PASS] Certificate auto-renewal is scheduled
+  [PASS] Firewall (ufw) is active and allows ports 80 and 443
   [PASS] 2 instance(s), none in the error state
 
-Summary: 14 passed, 1 warnings, 0 failed
+Summary: 15 passed, 1 warnings, 0 failed
 ```
 
 *(Example output; your values will differ.)*
