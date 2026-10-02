@@ -105,8 +105,8 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     id: 'mirza',
     displayName: 'MirzaBot',
     repoUrl: 'https://github.com/mahdiMGF2/mirzabot.git',
-    commit: '8ae4bd6852bfebadf3bcc949dc8a23ebea231d6a',
-    version: 'main @ 2026-09-30',
+    commit: '8e551ecf73d18dac8cb4b0cbada64c041e660f32',
+    version: 'main @ 2026-10-02',
     webhookPath: 'index.php',
     // index.php compares ?secret= with setting.webhook_secret and re-registers the
     // webhook with that query string, never with a secret_token header.

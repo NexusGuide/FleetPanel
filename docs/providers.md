@@ -4,7 +4,7 @@ A provider describes how to install one bot project. Providers live in `src/prov
 
 | Provider | Project | Pinned version | Webhook check | Installer directory removed |
 | --- | --- | --- | --- | --- |
-| `mirza` | [mahdiMGF2/mirzabot](https://github.com/mahdiMGF2/mirzabot) | `main` @ `8ae4bd6852be` | `?secret=` in the URL, stored in `setting.webhook_secret` | `install/` |
+| `mirza` | [mahdiMGF2/mirzabot](https://github.com/mahdiMGF2/mirzabot) | `main` @ `8e551ecf73d1` | `?secret=` in the URL, stored in `setting.webhook_secret` | `install/` |
 | `faoxima` | [Mmd-Amir/Faoxima](https://github.com/Mmd-Amir/Faoxima) | `v1.1.5` (`68eccf1981f1`) | `X-Telegram-Bot-Api-Secret-Token` header, via `TELEGRAM_WEBHOOK_SECRET` | `installer/` |
 
 ## Pinned upstream versions

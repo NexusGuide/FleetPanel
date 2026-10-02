@@ -6,7 +6,8 @@
 - **Bot code is pinned to reviewed upstream commits.** Installs and **Repair** used to download whatever
   was on the MirzaBot / Faoxima default branch, so anyone who took over one of those repositories could push
   code onto every FleetPanel server. Each provider now names one exact commit (MirzaBot `main` @
-  `8ae4bd6852be`, Faoxima `v1.1.5`); FleetPanel fetches exactly that commit and verifies it after checkout.
+  `8e551ecf73d1`, Faoxima `v1.1.5`); FleetPanel fetches exactly that commit and verifies it after
+  checkout. The MirzaBot pin includes its fix that re-enables an S-UI user on renewal or extra volume/time.
   Newer upstream versions arrive only through a reviewed FleetPanel release
   ([how pins are updated](docs/providers.md#pinned-upstream-versions)).
 
