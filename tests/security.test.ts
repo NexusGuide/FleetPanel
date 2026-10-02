@@ -10,6 +10,8 @@ import { passwordPolicyErrors } from '../src/security/passwords.js';
 import { dbIdentFor, instanceDir } from '../src/services/instances.js';
 import { assertSafeArchiveEntries, assertSafeArchiveLinks, assertSafeSqlDump } from '../src/services/backups.js';
 import { clientKey } from '../src/http/rateLimit.js';
+import { gitCheckout } from '../src/system/git.js';
+import { PROVIDERS, PROVIDER_IDS } from '../src/providers/index.js';
 import type { Request } from 'express';
 
 const TOKEN = `123456789:${'A'.repeat(35)}`;
@@ -148,6 +150,19 @@ describe('restore hardening', () => {
     expect(() => assertSafeArchiveLinks(['hrw-r--r-- u/g 0 2026-10-01 12:00 demo/b link to other/a'], 'demo')).toThrow();
     expect(() => assertSafeArchiveLinks(['crw-r--r-- u/g 1,3 2026-10-01 12:00 demo/null'], 'demo')).toThrow();
   });
+});
+
+describe('upstream pinning', () => {
+  it('pins every provider to a full commit id', () => {
+    for (const id of PROVIDER_IDS) expect(PROVIDERS[id].commit).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it.each([['a branch', 'main'], ['a tag', 'v1.1.5'], ['a short id', '8ae4bd6'], ['an option', '--upload-pack=x']])(
+    'refuses to check out %s',
+    async (_label, ref) => {
+      await expect(gitCheckout('https://example.invalid/x.git', ref, '/nonexistent')).rejects.toThrow(/invalid pinned commit/);
+    },
+  );
 });
 
 describe('rate-limit client keys', () => {

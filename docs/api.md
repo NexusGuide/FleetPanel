@@ -66,9 +66,14 @@ X-CSRF-Token: …
 - `provider`: `mirza` or `faoxima`
 - `domain`: must already resolve to the server (a certificate is issued and the webhook uses HTTPS)
 
-The bot token is checked with Telegram first; a token already used by another instance is rejected
-(`409 bot_in_use`). The response is `202` with `status: "provisioning"`. Poll `GET /api/instances/:id`
-until `status` is `running`, or `error` with the failing step in `last_error`.
+The bot token is checked with Telegram first. Duplicates are rejected with a message naming the existing
+bot: `409 slug_in_use` (same name, case-insensitive), `409 domain_in_use`, or `409 bot_in_use` (the same
+Telegram bot, even with a new token). The response is `202` with `status: "provisioning"`. Poll
+`GET /api/instances/:id` until `status` is `running`, or `error` with the failing step in `last_error`.
+
+`POST /api/instances/check` takes the same body, changes nothing and returns
+`{ "bot_username": "…", "conflicts": { "slug"?: "…", "domain"?: "…", "bot_token"?: "…" } }`; the create
+wizard calls it before the review step.
 
 ## Roles
 

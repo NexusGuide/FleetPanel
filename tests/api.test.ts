@@ -16,7 +16,8 @@ import { BackupService } from '../src/services/backups.js';
 import { InstanceService } from '../src/services/instances.js';
 import type { PrivilegedOps } from '../src/system/helper.js';
 import type { TelegramClient } from '../src/services/telegram.js';
-import { fakeClone, fakeRunner, fakeToolchain } from './fixtures.js';
+import { clonedCommits, fakeClone, fakeRunner, fakeToolchain } from './fixtures.js';
+import { PROVIDERS } from '../src/providers/index.js';
 
 const noop = async (): Promise<void> => undefined;
 const tools = fakeToolchain();
@@ -214,6 +215,11 @@ describe('API security', () => {
     }
     expect(status).toBe('running');
 
+    // The exact pinned upstream commit was installed and recorded, never a moving branch.
+    expect(clonedCommits).toContain(PROVIDERS.mirza.commit);
+    const created = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+    expect(created.source_commit).toBe(PROVIDERS.mirza.commit);
+
     const dir = path.join(tmp, 'instances', 'demo-bot');
     const config = fs.readFileSync(path.join(dir, 'config.php'), 'utf8');
     expect(config).toContain(`$APIKEY = '${TOKEN}';`);
@@ -236,6 +242,24 @@ describe('API security', () => {
       body: { slug: 'demo-bot', provider: 'mirza', domain: 'other.example.com', bot_token: TOKEN, admin_telegram_id: '42' },
     });
     expect(duplicate.status).toBe(409);
+    expect(duplicate.body.error).toBe('slug_in_use');
+    expect(duplicate.body.message).toContain("A bot named 'demo-bot' already exists");
+
+    // The wizard's pre-check reports every duplicate field without creating anything.
+    const check = await request('POST', '/api/instances/check', {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { slug: 'demo-bot', provider: 'faoxima', domain: 'BOT.example.com', bot_token: TOKEN, admin_telegram_id: '42' },
+    });
+    expect(check.status).toBe(200);
+    expect(check.body.bot_username).toBe('demo_bot');
+    expect(Object.keys(check.body.conflicts).sort()).toEqual(['bot_token', 'domain', 'slug']);
+    const free = await request('POST', '/api/instances/check', {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { slug: 'free-bot', provider: 'mirza', domain: 'free.example.com', bot_token: TOKEN, admin_telegram_id: '42' },
+    });
+    expect(free.body.conflicts).toEqual({ bot_token: "Bot @demo_bot is already used by bot 'demo-bot'." });
+    const listed = await request('GET', '/api/instances', { headers: { cookie } });
+    expect(listed.body.instances.map((i: { slug: string }) => i.slug)).not.toContain('free-bot');
 
     const sameBot = await request('POST', '/api/instances', {
       headers: { cookie, 'x-csrf-token': csrf },
@@ -333,6 +357,10 @@ describe('API security', () => {
     expect(sys.body.instances.running).toBeGreaterThanOrEqual(1);
     const providers = await request('GET', '/api/system/providers', { headers: { cookie } });
     expect(providers.body.providers.map((p: { id: string }) => p.id)).toEqual(['mirza', 'faoxima']);
+    for (const p of providers.body.providers as Array<{ commit: string; version: string }>) {
+      expect(p.commit).toMatch(/^[0-9a-f]{40}$/);
+      expect(p.version).toBeTruthy();
+    }
     expect((await request('GET', '/api/system')).status).toBe(401);
   });
 });

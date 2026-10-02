@@ -32,6 +32,7 @@ export interface Instance {
   db_user: string;
   bot_username: string | null;
   admin_telegram_id: string;
+  source_commit: string | null;
   status: InstanceStatus;
   last_error: string | null;
   created_at: string;
@@ -97,6 +98,13 @@ export interface Provider {
   id: string;
   name: string;
   repo_url: string;
+  version: string;
+  commit: string;
+}
+
+export interface InstanceCheck {
+  bot_username: string;
+  conflicts: Partial<Record<'slug' | 'domain' | 'bot_token', string>>;
 }
 
 export interface CreateInstanceInput {
@@ -237,6 +245,7 @@ export const api = {
   instance: (id: number) => request<{ instance: Instance }>('GET', `/api/instances/${id}`).then((r) => r.instance),
   createInstance: (input: CreateInstanceInput) =>
     request<{ instance: Instance }>('POST', '/api/instances', input).then((r) => r.instance),
+  checkInstance: (input: CreateInstanceInput) => request<InstanceCheck>('POST', '/api/instances/check', input),
   startInstance: (id: number) => request<{ instance: Instance }>('POST', `/api/instances/${id}/start`).then((r) => r.instance),
   stopInstance: (id: number) => request<{ instance: Instance }>('POST', `/api/instances/${id}/stop`).then((r) => r.instance),
   reprovision: (id: number) =>

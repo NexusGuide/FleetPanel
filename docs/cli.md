@@ -33,6 +33,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | PHP | older than 8.2, or missing one of mbstring, dom, pdo_mysql, mysqli, curl, zip, gd, intl, bcmath |
 | Composer | not installed |
 | Certificate renewal | *warn* when no certbot timer or cron job exists |
+| Firewall | *warn* when no firewall is active (optional), or ufw is active but ports 80/443 are not allowed |
 | Instances | *warn* for every instance in the error state |
 
 ## Instances and backups
@@ -78,6 +79,28 @@ per-instance "busy" lock.
 
 Downtime is a few seconds. Bots are not affected. Updates do not install new system packages; check the
 [changelog](../CHANGELOG.md) when upgrading.
+
+## Firewall
+
+An optional host firewall using `ufw` (installed on request). Run `sudo fleetpanel firewall enable`:
+
+1. Allows the SSH port(s) from `sshd -T` and the port of your current SSH session, so you cannot lock
+   yourself out; then 80 and 443 (certificates, bot sites, Telegram webhooks) and the panel's port in IP mode.
+2. For every other port that listens on a public address, asks whether to keep it open. Database ports
+   (3306, 5432, 6379, ...) default to **closed**, anything else to open.
+3. Optionally blocks ping (ICMP echo requests only; the originals of `/etc/ufw/before.rules` and
+   `before6.rules` are saved as `*.fleetpanel.bak`).
+4. Shows the summary and asks before applying. Existing ufw rules are kept; incoming traffic is denied by
+   default and outgoing traffic stays allowed.
+
+| Command | Description |
+| --- | --- |
+| `fleetpanel firewall` | Shows the ufw rules and whether ping is blocked. |
+| `fleetpanel firewall enable [--block-ping\|--allow-ping] [--yes]` | Sets up or updates the firewall as described above. `--yes` skips the questions (other public ports stay open, database ports close). |
+| `fleetpanel firewall disable [--yes]` | Turns ufw off. |
+
+If the server already uses `firewalld`, the command refuses; open 80 and 443 there. A cloud provider's
+firewall (security group) is separate and must also allow 80 and 443.
 
 ## Uninstall
 

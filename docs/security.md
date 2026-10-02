@@ -49,6 +49,14 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 - SQL in the control plane uses prepared statements. The few SQL statements sent to bot databases inline
   only values that were validated against strict patterns first.
 
+## Upstream bot code
+
+- Each provider is pinned to one reviewed upstream commit (40-hex id), never a branch or tag. Installs and
+  **Repair** fetch exactly that commit and verify `HEAD` afterwards, so a compromised upstream repository
+  cannot push new code onto FleetPanel servers; moving a pin is a reviewed FleetPanel release
+  (see [providers.md](providers.md#pinned-upstream-versions)).
+- The commit each instance was installed from is recorded and shown in the panel.
+
 ## Isolation on the host
 
 - Each instance has its own Linux user `fp-<slug>` and PHP-FPM pool with

@@ -35,7 +35,11 @@ $usernamebot                = '';
 $domainhosts                = rtrim(preg_replace('#^https?://#', '', $domainhosts), '/');
 `;
 
-export async function fakeClone(url: string, _ref: string | undefined, dest: string): Promise<void> {
+export const clonedCommits: string[] = [];
+
+export async function fakeClone(url: string, commit: string, dest: string): Promise<void> {
+  if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`invalid pinned commit '${commit}'`);
+  clonedCommits.push(commit);
   const faoxima = url.includes('Faoxima');
   fs.mkdirSync(path.join(dest, faoxima ? 'installer' : 'install'), { recursive: true });
   fs.writeFileSync(path.join(dest, 'config.php'), faoxima ? FAOXIMA_CONFIG : MIRZA_CONFIG);

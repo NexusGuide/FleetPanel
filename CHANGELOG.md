@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.3.3
+
+### Security
+- **Bot code is pinned to reviewed upstream commits.** Installs and **Repair** used to download whatever
+  was on the MirzaBot / Faoxima default branch, so anyone who took over one of those repositories could push
+  code onto every FleetPanel server. Each provider now names one exact commit (MirzaBot `main` @
+  `8ae4bd6852be`, Faoxima `v1.1.5`); FleetPanel fetches exactly that commit and verifies it after checkout.
+  Newer upstream versions arrive only through a reviewed FleetPanel release
+  ([how pins are updated](docs/providers.md#pinned-upstream-versions)).
+
+### Added
+- `fleetpanel firewall` (also in the menu): optional ufw setup that keeps SSH (detected from `sshd` and
+  your session), 80, 443 and the panel port open, asks about every other public port (database ports
+  default to closed), keeps existing rules and can block ping (`--block-ping`).
+- `fleetpanel doctor` reports whether a firewall is active and warns when ufw blocks 80/443.
+- The create wizard checks for duplicates before the review step: an existing bot name (also in other
+  letter case, e.g. `MIRZA1` = `mirza1`), domain or Telegram bot is reported on its field, naming the bot
+  that already uses it, and the bot's @username is shown on the review step. The API returns
+  `slug_in_use` / `domain_in_use` / `bot_in_use` instead of a generic conflict.
+- The instance details show the upstream commit the bot was installed from; the create wizard shows each
+  provider's pinned version.
+
+### Upgrading
+`sudo fleetpanel update`. Existing bots keep their current code until you press **Repair**, which
+reinstalls their code from the pinned commit (the database and the panel's settings for the bot are kept).
+
 ## v0.3.2
 
 Security release from a line-by-line audit. Upgrading is recommended; afterwards press **Repair** on each

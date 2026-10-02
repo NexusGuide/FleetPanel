@@ -51,6 +51,12 @@ Versions
   channel [REF]              Show or set the update channel (main, or a tag like v0.3.0)
   update                     Build the channel's latest version and switch with rollback
 
+Server
+  firewall [status]          Show the firewall (ufw) rules and ping state
+  firewall enable [--block-ping|--allow-ping] [--yes]
+                             Deny incoming traffic except SSH, HTTP, HTTPS and the panel port
+  firewall disable [--yes]   Turn the firewall off
+
   uninstall                  Remove FleetPanel (bots keep running; purge mode optional)
 EOF
 }
@@ -285,6 +291,19 @@ cmd_doctor() {
 
   if systemctl is-active --quiet certbot.timer 2>/dev/null || [[ -f /etc/cron.d/certbot ]]; then pass "Certificate auto-renewal is scheduled"; else warn "No certbot renewal timer found: certificates will expire after 90 days"; fi
 
+  if ufw_active; then
+    out="$(ufw status 2>/dev/null)"
+    if grep -qE '^(80(/tcp)?|Nginx Full|Nginx HTTP) .*ALLOW' <<<"$out" && grep -qE '^(443(/tcp)?|Nginx Full|Nginx HTTPS) .*ALLOW' <<<"$out"; then
+      pass "Firewall (ufw) is active and allows ports 80 and 443"
+    else
+      warn "Firewall (ufw) is active but ports 80/443 may be closed: certificates and webhooks need them (sudo fleetpanel firewall enable)"
+    fi
+  elif systemctl is-active --quiet firewalld 2>/dev/null; then
+    pass "Firewall (firewalld) is active"
+  else
+    warn "No firewall is active (optional): sudo fleetpanel firewall enable"
+  fi
+
   if [[ -f $DATA_DIR/fleetpanel.db ]]; then
     errors=0
     while IFS=$'\t' read -r slug _ _ status _; do
@@ -445,6 +464,134 @@ cmd_uninstall() {
 }
 
 # ---------------------------------------------------------------------------
+# Firewall (ufw, optional)
+
+UFW_PING_RULES=(/etc/ufw/before.rules /etc/ufw/before6.rules)
+# Services that should never face the internet; closed unless the operator says otherwise.
+PRIVATE_PORTS=' 3306 33060 5432 6379 11211 27017 '
+
+ufw_active() { command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; }
+ping_blocked() { grep -qE -- '--icmp-type echo-request -j DROP' /etc/ufw/before.rules 2>/dev/null; }
+
+# sshd's configured ports, plus the port this session came in on, so enabling never locks the operator out.
+ssh_ports() {
+  {
+    sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' || true
+    [[ -n ${SSH_CONNECTION:-} ]] && awk '{print $4}' <<<"$SSH_CONNECTION"
+  } | grep -E '^[0-9]{1,5}$' | sort -un || true
+}
+
+# The panel's own port when it runs in IP mode (domain mode uses 80/443).
+panel_ports() {
+  grep -oE 'listen +(\[::\]:)?[0-9]+' "$PANEL_SITE" 2>/dev/null | grep -oE '[0-9]+$' | sort -un || true
+}
+
+# TCP ports listening on a non-loopback address.
+public_tcp_ports() {
+  ss -Hltn 2>/dev/null | awk '{print $4}' | grep -vE '^(127\.|\[::1\]|\[::ffff:127\.)|%lo:' \
+    | sed -E 's/.*:([0-9]+)$/\1/' | grep -E '^[0-9]+$' | sort -un || true
+}
+
+listener_name() {
+  ss -Hltnp "sport = :$1" 2>/dev/null | grep -oE 'users:\(\("[^"]+"' | head -n 1 | cut -d'"' -f2 || true
+}
+
+set_ping() {
+  local from=DROP to=ACCEPT file
+  [[ $1 == block ]] && from=ACCEPT to=DROP
+  for file in "${UFW_PING_RULES[@]}"; do
+    [[ -f $file ]] || continue
+    [[ -f $file.fleetpanel.bak ]] || cp -p "$file" "$file.fleetpanel.bak"
+    # Only echo requests: other ICMP types (unreachable, IPv6 neighbour discovery) must keep working.
+    sed -i -E "/--icmp(v6)?-type echo-request /s/-j $from\$/-j $to/" "$file"
+  done
+}
+
+firewall_status() {
+  if ! command -v ufw >/dev/null 2>&1; then
+    echo "ufw is not installed. Set up a firewall with: sudo fleetpanel firewall enable"
+    return 0
+  fi
+  ufw status verbose
+  if ping_blocked; then echo "Ping: blocked"; else echo "Ping: allowed"; fi
+}
+
+firewall_enable() {
+  local ping=$1 yes=$2 port name answer
+  local -a ssh panel allow
+  if systemctl is-active --quiet firewalld 2>/dev/null; then
+    die "firewalld manages this server's firewall; allow ports 80 and 443 there instead"
+  fi
+  if ! command -v ufw >/dev/null 2>&1; then
+    [[ $yes == 1 || "$(ask 'ufw is not installed. Install it now? [y/N] ')" =~ ^[Yy]$ ]] || die "aborted"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ufw >/dev/null
+  fi
+
+  mapfile -t ssh < <(ssh_ports)
+  (( ${#ssh[@]} )) || ssh=(22)
+  mapfile -t panel < <(panel_ports)
+  allow=("${ssh[@]}" 80 443 "${panel[@]}")
+
+  # Anything else that listens publicly may be a service the operator relies on: ask about each one.
+  for port in $(public_tcp_ports); do
+    [[ " ${allow[*]} " == *" $port "* ]] && continue
+    name="$(listener_name "$port")"
+    if [[ $PRIVATE_PORTS == *" $port "* ]]; then
+      answer="$( [[ $yes == 1 ]] || ask "Port $port/tcp (${name:-unknown}) is a database port open to the internet. Keep it open? [y/N] ")"
+      [[ $answer =~ ^[Yy]$ ]] && allow+=("$port")
+    else
+      answer="$( [[ $yes == 1 ]] || ask "Port $port/tcp (${name:-unknown}) is open to the internet. Keep it open? [Y/n] ")"
+      [[ $answer =~ ^[Nn]$ ]] || allow+=("$port")
+    fi
+  done
+  mapfile -t allow < <(printf '%s\n' "${allow[@]}" | sort -un)
+
+  if [[ -z $ping && $yes != 1 ]]; then
+    [[ "$(ask 'Block ping (ICMP echo) from the internet? [y/N] ')" =~ ^[Yy]$ ]] && ping=block
+  fi
+
+  echo
+  echo "Incoming traffic will be denied except TCP ports: ${allow[*]} (SSH: ${ssh[*]})."
+  echo "Existing ufw rules are kept. Outgoing traffic stays allowed."
+  [[ -n $ping ]] && echo "Ping will be ${ping}ed."
+  [[ $yes == 1 || "$(ask 'Apply? [y/N] ')" =~ ^[Yy]$ ]] || { echo "Cancelled."; return 0; }
+
+  for port in "${allow[@]}"; do
+    ufw allow "$port/tcp" comment 'FleetPanel' >/dev/null
+  done
+  ufw default deny incoming >/dev/null
+  ufw default allow outgoing >/dev/null
+  [[ -n $ping ]] && set_ping "$ping"
+  if ufw_active; then ufw reload >/dev/null; else ufw --force enable >/dev/null; fi
+  echo "${C_OK}Firewall is active.${C_0}"
+  echo
+  firewall_status
+}
+
+cmd_firewall() {
+  local action="${1:-status}" ping="" yes=0 arg
+  (( $# )) && shift
+  for arg in "$@"; do
+    case $arg in
+      --block-ping) ping=block ;;
+      --allow-ping) ping=allow ;;
+      -y|--yes) yes=1 ;;
+      *) die "unknown option: $arg" ;;
+    esac
+  done
+  case $action in
+    status) firewall_status ;;
+    enable) firewall_enable "$ping" "$yes" ;;
+    disable)
+      ufw_active || { echo "The firewall is not active."; return 0; }
+      [[ $yes == 1 || "$(ask 'Disable the firewall? All ports become reachable. [y/N] ')" =~ ^[Yy]$ ]] || { echo "Cancelled."; return 0; }
+      ufw disable
+      ;;
+    *) die "usage: fleetpanel firewall [status | enable [--block-ping|--allow-ping] [--yes] | disable [--yes]]" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # Interactive menu
 
 menu() {
@@ -460,12 +607,12 @@ menu() {
     if [[ $state == active ]]; then echo "  Panel: ${C_OK}● running${C_0}"; else echo "  Panel: ${C_BAD}● ${state:-stopped}${C_0}"; fi
     cat <<EOF
 
-  1) Status            6) Back up control plane
-  2) Doctor            7) Restore a backup
-  3) Logs              8) Update
-  4) Instances         9) Version / update channel
-  5) Backups          10) Restart panel
-                      11) Uninstall
+  1) Status            7) Restore a backup
+  2) Doctor            8) Update
+  3) Logs              9) Version / update channel
+  4) Instances        10) Restart panel
+  5) Backups          11) Firewall
+  6) Back up panel    12) Uninstall
   0) Exit
 EOF
     choice="$(ask $'\nChoose: ')"
@@ -480,7 +627,8 @@ EOF
       8) (cmd_update) || true ;;
       9) cmd_version; local ref; ref="$(ask 'New channel (empty = keep): ')"; [[ -z $ref ]] || (cmd_channel "$ref") || true ;;
       10) systemctl restart "$SERVICE" && echo "Restarted." ;;
-      11) cmd_uninstall; exit 0 ;;
+      11) firewall_status; [[ "$(ask 'Set up or update the firewall now? [y/N] ')" =~ ^[Yy]$ ]] && { (firewall_enable "" 0) || true; } ;;
+      12) cmd_uninstall; exit 0 ;;
       0|q|"") exit 0 ;;
       *) echo "Unknown choice." ;;
     esac
@@ -505,6 +653,7 @@ case "${1:-}" in
   version) cmd_version ;;
   channel) need_root channel; shift; cmd_channel "$@" ;;
   update) need_root update; cmd_update ;;
+  firewall) need_root firewall; shift; cmd_firewall "$@" ;;
   uninstall) need_root uninstall; cmd_uninstall ;;
   -h|--help|help) usage ;;
   *) echo "Unknown command: $1" >&2; usage; exit 2 ;;

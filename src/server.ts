@@ -6,7 +6,7 @@ import { SecretBox } from './security/crypto.js';
 import { SessionStore } from './http/sessions.js';
 import { createApp } from './http/app.js';
 import { SudoHelper } from './system/helper.js';
-import { gitClone } from './system/git.js';
+import { gitCheckout } from './system/git.js';
 import { systemToolchain } from './system/toolchain.js';
 import { TelegramApi } from './services/telegram.js';
 import { BackupService } from './services/backups.js';
@@ -39,7 +39,7 @@ function main(): void {
     ops,
     telegram: new TelegramApi(),
     backups,
-    git: gitClone,
+    git: gitCheckout,
     tools: systemToolchain,
     instancesDir: config.instancesDir,
   });
