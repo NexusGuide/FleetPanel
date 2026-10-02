@@ -27,8 +27,14 @@ export interface BotProvider {
   id: ProviderId;
   displayName: string;
   repoUrl: string;
-  /** Git branch or tag to deploy. Undefined = upstream default branch. */
-  ref?: string;
+  /**
+   * The exact upstream commit FleetPanel installs (40-hex id). Never a branch or tag: those can be
+   * moved by whoever controls the upstream repository. Bump it only after reviewing the upstream
+   * changes, in a FleetPanel release (see docs/providers.md).
+   */
+  commit: string;
+  /** Human-readable label for that commit, shown in the panel. */
+  version: string;
   /** Path (relative to the web root) Telegram posts updates to. */
   webhookPath: string;
   webhookAuth: WebhookAuth;
@@ -99,6 +105,8 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     id: 'mirza',
     displayName: 'MirzaBot',
     repoUrl: 'https://github.com/mahdiMGF2/mirzabot.git',
+    commit: '8ae4bd6852bfebadf3bcc949dc8a23ebea231d6a',
+    version: 'main @ 2026-09-30',
     webhookPath: 'index.php',
     // index.php compares ?secret= with setting.webhook_secret and re-registers the
     // webhook with that query string, never with a secret_token header.
@@ -127,6 +135,8 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     id: 'faoxima',
     displayName: 'Faoxima',
     repoUrl: 'https://github.com/Mmd-Amir/Faoxima.git',
+    commit: '68eccf1981f1bd7f21c8000ad5fff198a0f6c175',
+    version: 'v1.1.5',
     webhookPath: 'index.php',
     // FaoximaWebhookAuth checks the secret_token header against TELEGRAM_WEBHOOK_SECRET.
     webhookAuth: 'header',

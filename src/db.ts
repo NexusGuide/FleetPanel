@@ -84,6 +84,8 @@ const MIGRATIONS: string[] = [
   CREATE TRIGGER audit_logs_no_delete BEFORE DELETE ON audit_logs
     BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   `,
+  // v0.3.3: which pinned upstream commit each instance runs.
+  `ALTER TABLE instances ADD COLUMN source_commit TEXT;`,
 ];
 
 export function openDb(file: string = path.join(config.dataDir, 'fleetpanel.db')): DB {

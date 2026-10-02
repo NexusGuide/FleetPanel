@@ -2,10 +2,28 @@
 
 A provider describes how to install one bot project. Providers live in `src/providers/index.ts`.
 
-| Provider | Project | Webhook check | Installer directory removed |
-| --- | --- | --- | --- |
-| `mirza` | [mahdiMGF2/mirzabot](https://github.com/mahdiMGF2/mirzabot) | `?secret=` in the URL, stored in `setting.webhook_secret` | `install/` |
-| `faoxima` | [Mmd-Amir/Faoxima](https://github.com/Mmd-Amir/Faoxima) | `X-Telegram-Bot-Api-Secret-Token` header, via `TELEGRAM_WEBHOOK_SECRET` | `installer/` |
+| Provider | Project | Pinned version | Webhook check | Installer directory removed |
+| --- | --- | --- | --- | --- |
+| `mirza` | [mahdiMGF2/mirzabot](https://github.com/mahdiMGF2/mirzabot) | `main` @ `8ae4bd6852be` | `?secret=` in the URL, stored in `setting.webhook_secret` | `install/` |
+| `faoxima` | [Mmd-Amir/Faoxima](https://github.com/Mmd-Amir/Faoxima) | `v1.1.5` (`68eccf1981f1`) | `X-Telegram-Bot-Api-Secret-Token` header, via `TELEGRAM_WEBHOOK_SECRET` | `installer/` |
+
+## Pinned upstream versions
+
+FleetPanel never installs "whatever is on the default branch". Each provider names one exact upstream
+commit (a 40-character id), and installs and **Repair** download exactly that commit and verify it with
+`git rev-parse HEAD`. Branches and tags can be moved by whoever controls the upstream repository; a commit
+id cannot, so a hijacked upstream account cannot push code onto servers running FleetPanel. The panel
+shows each instance's source commit in its details.
+
+To move a provider to a newer upstream version:
+
+1. Read every upstream change since the pinned commit:
+   `git diff <pinned>..<new> -- . ':!*.md'` (look for new outbound URLs, `eval`/`exec`/`shell_exec`,
+   obfuscated code, changed config or schema).
+2. Check the config template, `table.php` and the webhook check still match what the provider expects.
+3. Install it on a test server: create an instance, send `/start`, open its pages, back it up and restore.
+4. Update `commit` and `version` in `src/providers/index.ts` and the table above, and ship it in a
+   FleetPanel release. Existing bots move to the new version when an operator presses **Repair**.
 
 Both projects ship `config.php` as a template that their own web installer fills in. FleetPanel does the
 installer's work itself, so the web installer is never exposed:
@@ -31,7 +49,8 @@ interface BotProvider {
   id: ProviderId;
   displayName: string;
   repoUrl: string;
-  ref?: string;                   // branch or tag; default branch if omitted
+  commit: string;                 // exact upstream commit (40-hex); never a branch or tag
+  version: string;                // label shown in the panel, e.g. 'v1.1.5'
   webhookPath: string;            // e.g. 'index.php'
   webhookAuth: 'header' | 'query';
   configFile: string;             // the project's config template, relative to the instance
@@ -50,8 +69,9 @@ interface BotProvider {
    `index.php` verifies Telegram, and where its web installer lives.
 2. Add an entry to `PROVIDER_IDS` and `PROVIDERS`. Pass every value through `phpString()`; never
    concatenate raw input into PHP or SQL.
-3. Add a fake upstream layout to `tests/fixtures.ts` and a provisioning test in `tests/api.test.ts`.
-4. Test on a real server before releasing: create an instance, send `/start`, open its web pages, back it
+3. Pin it to a reviewed commit (see above).
+4. Add a fake upstream layout to `tests/fixtures.ts` and a provisioning test in `tests/api.test.ts`.
+5. Test on a real server before releasing: create an instance, send `/start`, open its web pages, back it
    up and restore it.
 
 The bots' scheduled tasks (cron jobs) are not installed yet; see the roadmap in the README.

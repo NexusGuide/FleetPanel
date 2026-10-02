@@ -56,7 +56,13 @@ export function systemRoutes(d: AppDeps): Router {
 
   r.get('/providers', (_req, res) => {
     res.json({
-      providers: PROVIDER_IDS.map((id) => ({ id, name: PROVIDERS[id].displayName, repo_url: PROVIDERS[id].repoUrl })),
+      providers: PROVIDER_IDS.map((id) => ({
+        id,
+        name: PROVIDERS[id].displayName,
+        repo_url: PROVIDERS[id].repoUrl,
+        version: PROVIDERS[id].version,
+        commit: PROVIDERS[id].commit,
+      })),
     });
   });
 

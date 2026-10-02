@@ -24,13 +24,15 @@ export interface InstanceRow {
   db_user: string;
   bot_username: string | null;
   admin_telegram_id: string;
+  /** Upstream commit the instance's code was installed from (null before the first download). */
+  source_commit: string | null;
   status: InstanceStatus;
   last_error: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export type GitClone = (repoUrl: string, ref: string | undefined, dest: string) => Promise<void>;
+export type GitCheckout = (repoUrl: string, commit: string, dest: string) => Promise<void>;
 
 export function dbIdentFor(slug: string): string {
   if (!SLUG_RE.test(slug)) throw new Error('invalid slug');
@@ -53,7 +55,7 @@ export interface InstanceServiceDeps {
   ops: PrivilegedOps;
   telegram: TelegramClient;
   backups: BackupService;
-  git: GitClone;
+  git: GitCheckout;
   tools: Toolchain;
   instancesDir: string;
 }
@@ -223,7 +225,8 @@ export class InstanceService {
       };
 
       if (cleanFirst) await step('Removing the previous install', () => this.d.ops.removeInstance(inst.slug));
-      await step(`Downloading ${provider.displayName}`, () => this.d.git(provider.repoUrl, provider.ref, dir));
+      await step(`Downloading ${provider.displayName} ${provider.version}`, () => this.d.git(provider.repoUrl, provider.commit, dir));
+      this.d.db.prepare('UPDATE instances SET source_commit = ? WHERE id = ?').run(provider.commit, id);
 
       await step('Writing config.php', async () => {
         const configPath = inside(provider.configFile);

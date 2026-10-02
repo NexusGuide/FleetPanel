@@ -32,6 +32,7 @@ export interface Instance {
   db_user: string;
   bot_username: string | null;
   admin_telegram_id: string;
+  source_commit: string | null;
   status: InstanceStatus;
   last_error: string | null;
   created_at: string;
@@ -97,6 +98,8 @@ export interface Provider {
   id: string;
   name: string;
   repo_url: string;
+  version: string;
+  commit: string;
 }
 
 export interface CreateInstanceInput {

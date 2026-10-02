@@ -16,7 +16,8 @@ import { BackupService } from '../src/services/backups.js';
 import { InstanceService } from '../src/services/instances.js';
 import type { PrivilegedOps } from '../src/system/helper.js';
 import type { TelegramClient } from '../src/services/telegram.js';
-import { fakeClone, fakeRunner, fakeToolchain } from './fixtures.js';
+import { clonedCommits, fakeClone, fakeRunner, fakeToolchain } from './fixtures.js';
+import { PROVIDERS } from '../src/providers/index.js';
 
 const noop = async (): Promise<void> => undefined;
 const tools = fakeToolchain();
@@ -214,6 +215,11 @@ describe('API security', () => {
     }
     expect(status).toBe('running');
 
+    // The exact pinned upstream commit was installed and recorded, never a moving branch.
+    expect(clonedCommits).toContain(PROVIDERS.mirza.commit);
+    const created = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+    expect(created.source_commit).toBe(PROVIDERS.mirza.commit);
+
     const dir = path.join(tmp, 'instances', 'demo-bot');
     const config = fs.readFileSync(path.join(dir, 'config.php'), 'utf8');
     expect(config).toContain(`$APIKEY = '${TOKEN}';`);
@@ -333,6 +339,10 @@ describe('API security', () => {
     expect(sys.body.instances.running).toBeGreaterThanOrEqual(1);
     const providers = await request('GET', '/api/system/providers', { headers: { cookie } });
     expect(providers.body.providers.map((p: { id: string }) => p.id)).toEqual(['mirza', 'faoxima']);
+    for (const p of providers.body.providers as Array<{ commit: string; version: string }>) {
+      expect(p.commit).toMatch(/^[0-9a-f]{40}$/);
+      expect(p.version).toBeTruthy();
+    }
     expect((await request('GET', '/api/system')).status).toBe(401);
   });
 });

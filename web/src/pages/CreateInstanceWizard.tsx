@@ -151,6 +151,9 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
                   <Layers className="w-4 h-4 text-blue-400" /> {p.name}
                 </span>
                 <span className="block text-[11px] text-slate-500 font-mono mt-1 break-all">{p.repo_url.replace(/^https:\/\//, '')}</span>
+                <span className="block text-[11px] text-slate-500 font-mono mt-0.5">
+                  {p.version} · {p.commit.slice(0, 12)}
+                </span>
               </button>
             ))}
           </div>

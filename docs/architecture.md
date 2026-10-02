@@ -58,13 +58,14 @@ Schema migrations are an append-only list in `src/db.ts`, applied at startup.
 secrets encrypted and returns `202`. Provisioning then runs in the background; each step's failure is
 recorded in `last_error` with the step name:
 
-1. Download the bot (`git clone --depth 1`)
+1. Download the provider's pinned upstream commit (shallow fetch of that exact id, verified after checkout)
 2. Fill the project's own `config.php` template
-3. `composer install --no-dev` if the project does not ship `vendor/`
-4. Remove the project's web installer directory
-5. Create the MySQL database and user (helper)
-6. Run the project's schema script (`table.php`) with the PHP CLI and verify the result with a query
-7. Set ownership and ACLs (helper)
+3. Remove the project's web installer directory
+4. Create the MySQL database and user (helper)
+5. Set ownership and ACLs (helper)
+6. `composer install --no-dev --no-scripts --no-plugins` as the bot's Linux user if the project does not
+   ship `vendor/` (helper `instance-run`)
+7. Run the project's schema script (`table.php`) as the bot's Linux user and verify the result with a query
 8. Create the PHP-FPM pool and nginx site, validated with `php-fpm -t` and `nginx -t` (helper)
 9. Issue the certificate (helper → certbot)
 10. Register the Telegram webhook with the instance's secret

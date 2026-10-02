@@ -140,6 +140,9 @@ export function InstanceDrawer({
                 <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Details</h3>
                 <dl className="rounded-lg bg-panel border border-slate-800/80 px-3">
                   <Row label="Provider">{inst.provider}</Row>
+                  <Row label="Source commit" copy={inst.source_commit ?? undefined}>
+                    {inst.source_commit ? inst.source_commit.slice(0, 12) : '—'}
+                  </Row>
                   <Row label="Domain" copy={inst.domain}>
                     <a href={`https://${inst.domain}/`} target="_blank" rel="noreferrer noopener" className="hover:text-blue-300 inline-flex items-center gap-1">
                       {inst.domain} <ExternalLink className="w-3 h-3" />

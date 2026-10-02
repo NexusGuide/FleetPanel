@@ -13,7 +13,7 @@ import { BACKUP_ID_RE, BackupService } from './services/backups.js';
 import { InstanceService, type InstanceRow } from './services/instances.js';
 import { TelegramApi } from './services/telegram.js';
 import { SudoHelper } from './system/helper.js';
-import { gitClone } from './system/git.js';
+import { gitCheckout } from './system/git.js';
 import { systemToolchain } from './system/toolchain.js';
 import { run } from './system/exec.js';
 import { errorMessage } from './errors.js';
@@ -115,7 +115,7 @@ function services(db: DB) {
     ops,
     telegram: new TelegramApi(),
     backups,
-    git: gitClone,
+    git: gitCheckout,
     tools: systemToolchain,
     instancesDir: config.instancesDir,
   });
