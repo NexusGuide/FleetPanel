@@ -242,6 +242,24 @@ describe('API security', () => {
       body: { slug: 'demo-bot', provider: 'mirza', domain: 'other.example.com', bot_token: TOKEN, admin_telegram_id: '42' },
     });
     expect(duplicate.status).toBe(409);
+    expect(duplicate.body.error).toBe('slug_in_use');
+    expect(duplicate.body.message).toContain("A bot named 'demo-bot' already exists");
+
+    // The wizard's pre-check reports every duplicate field without creating anything.
+    const check = await request('POST', '/api/instances/check', {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { slug: 'demo-bot', provider: 'faoxima', domain: 'BOT.example.com', bot_token: TOKEN, admin_telegram_id: '42' },
+    });
+    expect(check.status).toBe(200);
+    expect(check.body.bot_username).toBe('demo_bot');
+    expect(Object.keys(check.body.conflicts).sort()).toEqual(['bot_token', 'domain', 'slug']);
+    const free = await request('POST', '/api/instances/check', {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { slug: 'free-bot', provider: 'mirza', domain: 'free.example.com', bot_token: TOKEN, admin_telegram_id: '42' },
+    });
+    expect(free.body.conflicts).toEqual({ bot_token: "Bot @demo_bot is already used by bot 'demo-bot'." });
+    const listed = await request('GET', '/api/instances', { headers: { cookie } });
+    expect(listed.body.instances.map((i: { slug: string }) => i.slug)).not.toContain('free-bot');
 
     const sameBot = await request('POST', '/api/instances', {
       headers: { cookie, 'x-csrf-token': csrf },

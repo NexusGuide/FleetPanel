@@ -24,6 +24,18 @@ export function instanceRoutes(d: AppDeps): Router {
     }),
   );
 
+  // Lets the create wizard report a duplicate name, domain or bot before the final step.
+  const checks = rateLimit({ limit: 30, windowMs: 5 * 60_000, key: (req) => `check|${req.auth?.adminId ?? req.ip}` });
+  r.post(
+    '/check',
+    requirePermission('instances.create', d.audit),
+    checks,
+    ah(async (req, res) => {
+      const input = createInstanceSchema.parse(req.body);
+      res.json(await d.instances.check(input));
+    }),
+  );
+
   r.get('/:id', requirePermission('instances.read', d.audit), (req, res) => {
     res.json({ instance: d.instances.get(intParam(req, 'id')) });
   });

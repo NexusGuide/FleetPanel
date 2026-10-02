@@ -15,6 +15,10 @@
   your session), 80, 443 and the panel port open, asks about every other public port (database ports
   default to closed), keeps existing rules and can block ping (`--block-ping`).
 - `fleetpanel doctor` reports whether a firewall is active and warns when ufw blocks 80/443.
+- The create wizard checks for duplicates before the review step: an existing bot name (also in other
+  letter case, e.g. `MIRZA1` = `mirza1`), domain or Telegram bot is reported on its field, naming the bot
+  that already uses it, and the bot's @username is shown on the review step. The API returns
+  `slug_in_use` / `domain_in_use` / `bot_in_use` instead of a generic conflict.
 - The instance details show the upstream commit the bot was installed from; the create wizard shows each
   provider's pinned version.
 

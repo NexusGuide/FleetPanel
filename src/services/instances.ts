@@ -32,6 +32,8 @@ export interface InstanceRow {
   updated_at: string;
 }
 
+export type InstanceConflicts = Partial<Record<'slug' | 'domain' | 'bot_token', string>>;
+
 export type GitCheckout = (repoUrl: string, commit: string, dest: string) => Promise<void>;
 
 export function dbIdentFor(slug: string): string {
@@ -135,16 +137,33 @@ export class InstanceService {
     if (result.changes > 0) log.warn(`Flagged ${result.changes} interrupted instance(s) as error`);
   }
 
+  /** Why an instance with these values cannot be created, per field (empty when there is no conflict). */
+  conflicts(slug: string, domain: string, botUsername?: string): InstanceConflicts {
+    const find = (column: 'slug' | 'domain' | 'bot_username', value: string) =>
+      this.d.db.prepare(`SELECT slug FROM instances WHERE ${column} = ? COLLATE NOCASE`).get(value) as { slug: string } | undefined;
+    const out: InstanceConflicts = {};
+    if (find('slug', slug)) out.slug = `A bot named '${slug}' already exists.`;
+    const byDomain = find('domain', domain);
+    if (byDomain) out.domain = `${domain} is already used by bot '${byDomain.slug}'.`;
+    // A bot has exactly one webhook: a second instance would silently steal its traffic.
+    const byBot = botUsername ? find('bot_username', botUsername) : undefined;
+    if (byBot) out.bot_token = `Bot @${botUsername} is already used by bot '${byBot.slug}'.`;
+    return out;
+  }
+
+  /** Validates a creation request without changing anything (token checked with Telegram). */
+  async check(input: CreateInstanceInput): Promise<{ bot_username: string; conflicts: InstanceConflicts }> {
+    const bot = await this.d.telegram.getMe(input.bot_token);
+    return { bot_username: bot.username, conflicts: this.conflicts(input.slug, input.domain, bot.username) };
+  }
+
   async create(input: CreateInstanceInput, actor: ActorRef): Promise<InstanceRow> {
     // Fail fast on a bad token before touching the system.
     const bot = await this.d.telegram.getMe(input.bot_token);
-    // A bot has exactly one webhook: a second instance would silently steal its traffic.
-    const sameBot = this.d.db.prepare('SELECT slug FROM instances WHERE bot_username = ? COLLATE NOCASE').get(bot.username) as
-      | { slug: string }
-      | undefined;
-    if (sameBot) {
-      throw new HttpError(409, 'bot_in_use', `Bot @${bot.username} is already used by instance '${sameBot.slug}'.`);
-    }
+    const conflicts = this.conflicts(input.slug, input.domain, bot.username);
+    if (conflicts.slug) throw new HttpError(409, 'slug_in_use', conflicts.slug);
+    if (conflicts.domain) throw new HttpError(409, 'domain_in_use', conflicts.domain);
+    if (conflicts.bot_token) throw new HttpError(409, 'bot_in_use', conflicts.bot_token);
     const ident = dbIdentFor(input.slug);
 
     let id: number;

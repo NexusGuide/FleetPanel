@@ -8,6 +8,7 @@ import {
   api,
   type CreateInstanceInput,
   type Instance,
+  type InstanceCheck,
 } from '../api';
 import { Button, ErrorBanner, Field, Input, Modal, Notice, Spinner, cx, errorText, useResource } from '../components/ui';
 
@@ -44,6 +45,11 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
   const [showToken, setShowToken] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  // Duplicates reported by the server, kept until the user edits that field.
+  const [conflicts, setConflicts] = useState<InstanceCheck['conflicts']>({});
+  const [botUsername, setBotUsername] = useState<string | null>(null);
 
   const errors = useMemo(() => validate(form), [form]);
   const detailsValid = !errors.slug && !errors.domain && !errors.bot_token && !errors.admin_telegram_id;
@@ -57,20 +63,47 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
       return next;
     });
     setSubmitError(null);
+    setCheckError(null);
+    setConflicts((c) => {
+      const next = { ...c };
+      delete next[key as keyof typeof c];
+      if (key === 'domain' && !slugTouched) delete next.slug;
+      return next;
+    });
   };
 
-  const fieldError = (key: keyof CreateInstanceInput) => (touched[key] ? errors[key] : undefined);
+  const fieldError = (key: keyof CreateInstanceInput) =>
+    (touched[key] ? errors[key] : undefined) ?? conflicts[key as keyof typeof conflicts];
+
+  const normalized = (): CreateInstanceInput => ({
+    ...form,
+    domain: form.domain.trim().toLowerCase(),
+    bot_token: form.bot_token.trim(),
+    admin_telegram_id: form.admin_telegram_id.trim(),
+  });
+
+  const review = async () => {
+    setTouched({ slug: true, domain: true, bot_token: true, admin_telegram_id: true });
+    if (!detailsValid) return;
+    setChecking(true);
+    setCheckError(null);
+    try {
+      const res = await api.checkInstance(normalized());
+      setConflicts(res.conflicts);
+      setBotUsername(res.bot_username);
+      if (Object.keys(res.conflicts).length === 0) setStep(2);
+    } catch (err) {
+      setCheckError(errorText(err));
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const submit = async () => {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const inst = await api.createInstance({
-        ...form,
-        domain: form.domain.trim().toLowerCase(),
-        bot_token: form.bot_token.trim(),
-        admin_telegram_id: form.admin_telegram_id.trim(),
-      });
+      const inst = await api.createInstance(normalized());
       onCreated(inst);
     } catch (err) {
       setSubmitError(errorText(err));
@@ -92,13 +125,7 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
         </Button>
       )}
       {step === 1 && (
-        <Button
-          variant="primary"
-          onClick={() => {
-            setTouched({ slug: true, domain: true, bot_token: true, admin_telegram_id: true });
-            if (detailsValid) setStep(2);
-          }}
-        >
+        <Button variant="primary" loading={checking} onClick={() => void review()}>
           Review <ChevronRight className="w-3.5 h-3.5" />
         </Button>
       )}
@@ -226,6 +253,7 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
               autoComplete="off"
             />
           </Field>
+          {checkError && <ErrorBanner error={checkError} />}
         </div>
       )}
 
@@ -236,6 +264,7 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
               ['Provider', providerName],
               ['Domain', form.domain.trim().toLowerCase()],
               ['Slug', form.slug],
+              ['Telegram bot', botUsername ? `@${botUsername}` : '—'],
               ['Bot token', `${form.bot_token.trim().split(':')[0]}:••••••`],
               ['Admin Telegram ID', form.admin_telegram_id.trim()],
               ['Database', `fp_${form.slug.replace(/-/g, '_')}`],

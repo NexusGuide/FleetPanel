@@ -102,6 +102,11 @@ export interface Provider {
   commit: string;
 }
 
+export interface InstanceCheck {
+  bot_username: string;
+  conflicts: Partial<Record<'slug' | 'domain' | 'bot_token', string>>;
+}
+
 export interface CreateInstanceInput {
   slug: string;
   provider: string;
@@ -240,6 +245,7 @@ export const api = {
   instance: (id: number) => request<{ instance: Instance }>('GET', `/api/instances/${id}`).then((r) => r.instance),
   createInstance: (input: CreateInstanceInput) =>
     request<{ instance: Instance }>('POST', '/api/instances', input).then((r) => r.instance),
+  checkInstance: (input: CreateInstanceInput) => request<InstanceCheck>('POST', '/api/instances/check', input),
   startInstance: (id: number) => request<{ instance: Instance }>('POST', `/api/instances/${id}/start`).then((r) => r.instance),
   stopInstance: (id: number) => request<{ instance: Instance }>('POST', `/api/instances/${id}/stop`).then((r) => r.instance),
   reprovision: (id: number) =>
