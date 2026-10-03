@@ -333,15 +333,10 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
             ))}
           </dl>
           <Notice tone="warn">
-            Before you continue, make sure <b className="font-mono">{form.domain.trim().toLowerCase()}</b> resolves to this
-            server and port 80 is open. Let's Encrypt and Telegram both need to reach it over the internet, otherwise
-            the install stops with an error (you can fix DNS and press Reprovision).
+            <b className="font-mono">{form.domain.trim().toLowerCase()}</b> must point to this server and port 80 must be open.
           </Notice>
           {provider?.runtime === 'python' && (
-            <Notice tone="info">
-              {providerName} runs as its own service with its own Redis. The first one on this server also installs
-              Python, so it can take several minutes.
-            </Notice>
+            <Notice tone="info">The first {providerName} on this server also installs Python and takes a few minutes longer.</Notice>
           )}
           {submitError && <ErrorBanner error={submitError} />}
         </div>

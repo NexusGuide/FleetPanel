@@ -36,6 +36,12 @@ Test build: follow it with `sudo fleetpanel channel dev && sudo fleetpanel updat
 - The "open" buttons in the instance list and details opened the site root, which for MirzaBot and Faoxima
   is the Telegram webhook (nginx answers 403 without the secret). They now open the bot's own web panel
   (`/panel/`; PasarguardBot: `/webapp/`), shown as its own *Web panel* row in the details.
+- The audit log page failed (500) when secret masking had turned a stored entry into invalid JSON; such an
+  entry is now shown as text.
+- `fleetpanel update` kept every pre-update database snapshot forever; only the three newest are kept.
+- Shorter, clearer CLI output: `update` shows the build log only when the build fails, `version` is one line,
+  and the menu's channel picker no longer repeats itself. The panel's install hints no longer list
+  PHP-only steps for Python bots.
 
 ### Upgrading
 `sudo fleetpanel update`. Existing MirzaBot and Faoxima bots are not changed.
