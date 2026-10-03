@@ -155,7 +155,7 @@ function BackupCard({ current, onSaved }: { current: BackupSettings; onSaved: ()
           />
         </Field>
         <div className="grid sm:grid-cols-2 gap-4">
-          <Field label="Chat ID" hint="Private chat, group or channel." error={chatError}>
+          <Field label="Chat ID" hint="Your numeric Telegram id (send /start to the bot first), or a group/channel id (-100…)." error={chatError}>
             <Input value={chatId} onChange={(e) => setChatId(e.target.value)} placeholder="-1001234567890" className="font-mono" invalid={!!chatError} />
           </Field>
           <Field label="Topic ID (optional)" hint="For a topic in a forum group." error={threadError}>
