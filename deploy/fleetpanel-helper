@@ -231,8 +231,11 @@ cmd_instance_run() {
   # stdout goes to stderr too: PHP CLI prints fatal errors on stdout, and the panel shows stderr.
   if [[ -n $envf ]]; then
     # The bot's secrets go in through stdin and the environment, never the command line (ps).
+    # Read the already-open descriptor: opening /dev/stdin would reopen the root-only file as the
+    # bot's user and fail. Each validated KEY=value line is exported as one word, never parsed.
     (cd -P -- "$dir" && echo 900 > /proc/self/oom_score_adj && timeout "$limit" runuser -u "$user" -- env -i "${base[@]}" \
-      bash -c 'set -a; . /dev/stdin; set +a; exec "$@"' fleetpanel-run "${cmd[@]}" <"$envf") >&2 || rc=$?
+      bash -c 'while IFS= read -r line || [[ -n $line ]]; do [[ -z $line ]] || export "$line" || exit 1; done; exec "$@" </dev/null' \
+      fleetpanel-run "${cmd[@]}" <"$envf") >&2 || rc=$?
   else
     (cd -P -- "$dir" && echo 900 > /proc/self/oom_score_adj && timeout "$limit" runuser -u "$user" -- env -i "${base[@]}" "${cmd[@]}" </dev/null) >&2 || rc=$?
   fi
