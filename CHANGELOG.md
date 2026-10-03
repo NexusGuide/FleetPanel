@@ -1,6 +1,9 @@
 # Changelog
 
-## v0.4.0
+## v0.4.0-beta.1 (dev channel)
+
+Test build: follow it with `sudo fleetpanel channel dev && sudo fleetpanel update`. It moves to the stable
+`main` channel as v0.4.0 once testers have had a go at it.
 
 ### Added
 - **PasarguardBot** ([AmirKenzo/PasarguardBot](https://github.com/AmirKenzo/PasarguardBot) `v2.1.4`), the

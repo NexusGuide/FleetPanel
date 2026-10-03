@@ -174,6 +174,19 @@ Summary: 15 passed, 1 warnings, 0 failed
 
 Bots are never stopped by a panel update.
 
+## 🧪 Release channels
+
+| Channel | What you get | Switch |
+| :--- | :--- | :--- |
+| `main` | Stable releases (default) | `sudo fleetpanel channel main && sudo fleetpanel update` |
+| `dev` | Test builds: new features first, may have bugs | `sudo fleetpanel channel dev && sudo fleetpanel update` |
+| `vX.Y.Z` | One fixed release, never moves | `sudo fleetpanel channel v0.3.3 && sudo fleetpanel update` |
+
+New features land on `dev` first and move to `main` once testers have found and fixed their bugs.
+Found one? Please open an [issue](https://github.com/NexusGuide/FleetPanel/issues) with the panel's error
+and `sudo fleetpanel doctor` output. To install a test build directly:
+`curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/dev/install.sh | sudo FLEETPANEL_REF=dev bash`
+
 ## 🗑️ Uninstall
 
 `sudo fleetpanel uninstall` offers two modes:

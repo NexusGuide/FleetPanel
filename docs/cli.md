@@ -65,7 +65,7 @@ per-instance "busy" lock.
 | --- | --- |
 | `fleetpanel version` | Installed version, commit and update channel. |
 | `fleetpanel channel` | Shows the update channel and the latest released tags. |
-| `fleetpanel channel REF` | Sets the channel to a branch (`main`) or a release tag (`v0.3.0`). Takes effect on the next update. |
+| `fleetpanel channel REF` | Sets the channel: `main` (stable), `dev` (test builds, new features first) or a release tag (`v0.3.0`). Takes effect on the next update. Moving from `dev` back to `main` can look like a downgrade (`0.4.0-beta.1` is older than `0.4.0`); `update` asks before installing an older version. |
 | `fleetpanel update` | Updates to the latest commit of the channel (see below). |
 
 ### Update
