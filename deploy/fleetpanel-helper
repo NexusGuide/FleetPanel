@@ -226,15 +226,18 @@ cmd_instance_run() {
     UV_PYTHON_INSTALL_DIR="$RUNTIME_DIR/python" UV_PYTHON_DOWNLOADS=never UV_PYTHON_PREFERENCE=only-managed
     UV_CACHE_DIR="$dir/.cache/uv" UV_LINK_MODE=copy BUN_INSTALL_CACHE_DIR="$dir/.cache/bun" DO_NOT_TRACK=1)
   rc=0
+  # If memory runs out (a web-app build can take a lot), the kernel kills these steps first, never
+  # the panel or the other bots (oom_score_adj is inherited); the step then fails with a clear error.
   # stdout goes to stderr too: PHP CLI prints fatal errors on stdout, and the panel shows stderr.
   if [[ -n $envf ]]; then
     # The bot's secrets go in through stdin and the environment, never the command line (ps).
-    (cd -P -- "$dir" && timeout "$limit" runuser -u "$user" -- env -i "${base[@]}" \
+    (cd -P -- "$dir" && echo 900 > /proc/self/oom_score_adj && timeout "$limit" runuser -u "$user" -- env -i "${base[@]}" \
       bash -c 'set -a; . /dev/stdin; set +a; exec "$@"' fleetpanel-run "${cmd[@]}" <"$envf") >&2 || rc=$?
   else
-    (cd -P -- "$dir" && timeout "$limit" runuser -u "$user" -- env -i "${base[@]}" "${cmd[@]}" </dev/null) >&2 || rc=$?
+    (cd -P -- "$dir" && echo 900 > /proc/self/oom_score_adj && timeout "$limit" runuser -u "$user" -- env -i "${base[@]}" "${cmd[@]}" </dev/null) >&2 || rc=$?
   fi
   rm -rf -- "$home"
+  [[ $rc -ne 137 ]] || die "$task was killed, probably out of memory: free some RAM or add swap, then press Repair"
   [[ $rc -eq 0 ]] || die "$task failed with exit code $rc"
 }
 

@@ -131,9 +131,20 @@ copy_db() {
 
 # Builds the new version in a staging directory while the panel keeps running, then
 # swaps directories. Downtime is a few seconds, and rollback is a rename (no rebuild).
+# Instances with an install or delete in progress (the panel runs those itself).
+busy_instances() {
+  app_cli list-instances --tsv 2>/dev/null | awk -F'\t' '$4 == "provisioning" || $4 == "deleting" {print $1}' | tr '\n' ' ' || true
+}
+
 cmd_update() {
-  local prev ref url snapshot
+  local prev ref url snapshot busy
   local staging="$FLEET_DIR/app.new" previous="$FLEET_DIR/app.prev"
+  # Updating restarts the panel, which would cut an install short ("Interrupted by a control-plane restart").
+  busy="$(busy_instances)"
+  if [[ -n $busy ]]; then
+    echo "${C_WARN}Being installed or deleted right now: ${busy% }.${C_0} Updating restarts the panel and interrupts that."
+    [[ "$(ask 'Wait for it to finish first. Update anyway? [y/N] ')" =~ ^[Yy]$ ]] || die "update cancelled; nothing was changed."
+  fi
   ref="$(current_ref)"
   url="$(git -C "$APP_DIR" remote get-url origin)"
   prev="$(git -C "$APP_DIR" rev-parse HEAD)"
@@ -338,7 +349,10 @@ cmd_logs() {
       *)
         if [[ $arg =~ ^[0-9]{1,6}$ ]]; then lines="$arg"
         # A service bot (Python) logs to the journal under its own unit.
-        elif [[ $arg =~ ^[a-z][a-z0-9-]{1,27}[a-z0-9]$ && -f /etc/systemd/system/fleetpanel-bot-$arg.service ]]; then unit="fleetpanel-bot-$arg.service"
+        elif [[ $arg =~ ^[a-z][a-z0-9-]{1,27}[a-z0-9]$ ]]; then
+          [[ -f /etc/systemd/system/fleetpanel-bot-$arg.service ]] \
+            || die "'$arg' has no bot service: only Python bots have one, and it is created at the end of their installation. Installation errors are in the panel and in: sudo fleetpanel logs"
+          unit="fleetpanel-bot-$arg.service"
         else die "usage: fleetpanel logs [SLUG] [N] [-f]   (SLUG: a Python bot)"; fi
         ;;
     esac
