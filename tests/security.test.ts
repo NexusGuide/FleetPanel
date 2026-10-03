@@ -8,7 +8,7 @@ import { can, permissionsFor } from '../src/security/rbac.js';
 import { maskSecrets } from '../src/security/mask.js';
 import { passwordPolicyErrors } from '../src/security/passwords.js';
 import { dbIdentFor, instanceDir } from '../src/services/instances.js';
-import { assertSafeArchiveEntries, assertSafeArchiveLinks, assertSafeSqlDump } from '../src/services/backups.js';
+import { assertSafeArchiveEntries, assertSafeArchiveLinks, assertSafeSqlDump, backupExcludes } from '../src/services/backups.js';
 import { clientKey } from '../src/http/rateLimit.js';
 import { gitCheckout } from '../src/system/git.js';
 import { PROVIDERS, PROVIDER_IDS } from '../src/providers/index.js';
@@ -163,6 +163,31 @@ describe('upstream pinning', () => {
       await expect(gitCheckout('https://example.invalid/x.git', ref, '/nonexistent')).rejects.toThrow(/invalid pinned commit/);
     },
   );
+});
+
+describe('service bots', () => {
+  it('requires and validates the Telegram API credentials', () => {
+    const pasar = { ...valid, provider: 'pasarguard' };
+    expect(createInstanceSchema.safeParse(pasar).success).toBe(false);
+    expect(createInstanceSchema.safeParse({ ...pasar, api_id: '12345', api_hash: 'a'.repeat(32) }).success).toBe(true);
+    expect(createInstanceSchema.safeParse({ ...pasar, api_id: '1; id', api_hash: 'a'.repeat(32) }).success).toBe(false);
+    expect(createInstanceSchema.safeParse({ ...pasar, api_id: '12345', api_hash: `${'a'.repeat(31)}$` }).success).toBe(false);
+  });
+
+  it('masks database URL passwords and API hashes in errors', () => {
+    const text = 'connect mysql+asyncmy://fp_demo:S3cretPass@localhost/fp_demo failed; API_HASH=0123456789abcdef0123456789abcdef';
+    expect(maskSecrets(text)).not.toContain('S3cretPass');
+    expect(maskSecrets(text)).not.toContain('0123456789abcdef0123456789abcdef');
+  });
+
+  it('keeps virtualenvs and package caches out of backups', () => {
+    expect(backupExcludes('demo')).toEqual([
+      '--exclude=demo/.venv',
+      '--exclude=demo/.cache',
+      '--exclude=demo/frontend/node_modules',
+      '--exclude=demo/data/redis/redis.sock',
+    ]);
+  });
 });
 
 describe('rate-limit client keys', () => {

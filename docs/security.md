@@ -59,6 +59,19 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 
 ## Isolation on the host
 
+Service bots (PasarguardBot) additionally:
+
+- run as systemd services under `fp-<slug>` with `ProtectSystem=strict` (only their own folder is
+  writable), `NoNewPrivileges`, `PrivateTmp`, kernel/cgroup protection and memory limits;
+- get their secrets from `/etc/fleetpanel/instances/<slug>.env` (root-only, allowlisted keys, shell-safe
+  values), never from a file in their folder or from a command line;
+- each have their own Redis on a Unix socket with mode 700 (no TCP, no shared keyspace);
+- have their web server forced onto 127.0.0.1 (the upstream code binds 0.0.0.0); provisioning stops the bot
+  if it listens anywhere else, and nginx hides the API documentation;
+- get no `www-data` access to their folder (nginx only proxies to them);
+- use toolchains pinned by version and SHA-256 (uv, bun) and lock files with hashes (`uv.lock`,
+  `bun.lock`); dependencies are installed as the bot's user.
+
 - Each instance has its own Linux user `fp-<slug>` and PHP-FPM pool with
   `open_basedir = <instance dir>:/tmp`, `display_errors off`.
 - `instance-perms` (helper): files owned by `fp-<slug>`, `chmod u=rwX,g=rX,o=`; ACLs grant the

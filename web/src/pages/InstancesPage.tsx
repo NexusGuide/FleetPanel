@@ -115,7 +115,7 @@ export function InstancesPage({
     <div>
       <PageHeader
         title="Instances"
-        description="Each instance is an isolated bot: its own Linux user, PHP-FPM pool, MySQL database, nginx site and certificate."
+        description="Each instance is an isolated bot: its own Linux user, MySQL database, nginx site, certificate and PHP pool or service."
         actions={
           can('instances.create') && (
             <Button variant="primary" icon={<Plus className="w-3.5 h-3.5" />} onClick={onCreate}>

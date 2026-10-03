@@ -23,6 +23,7 @@ const noop = async (): Promise<void> => undefined;
 const tools = fakeToolchain();
 const createdSites: Array<{ slug: string; auth: string }> = [];
 const webhooks: string[] = [];
+const clearedWebhooks: string[] = [];
 const ops: PrivilegedOps = {
   createDatabase: noop,
   dropDatabase: noop,
@@ -41,7 +42,9 @@ const telegram: TelegramClient = {
   setWebhook: async (_token, url) => {
     webhooks.push(url);
   },
-  deleteWebhook: noop,
+  deleteWebhook: async (token) => {
+    clearedWebhooks.push(token);
+  },
 };
 
 const TOKEN = `123456789:${'A'.repeat(35)}`;
@@ -349,6 +352,73 @@ describe('API security', () => {
     expect(created.ip).toBe('127.0.0.1');
   });
 
+  it('installs a Python service bot (PasarguardBot) with its own service and no webhook', async () => {
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    telegram.getMe = async () => ({ id: 3, username: 'pasar_bot' });
+    const body = { slug: 'pasar-bot', provider: 'pasarguard', domain: 'pasar.example.com', bot_token: TOKEN, admin_telegram_id: '42' };
+
+    // MTProto needs the API id/hash: refused before anything is created.
+    const missing = await request('POST', '/api/instances', { headers: { cookie, 'x-csrf-token': csrf }, body });
+    expect(missing.status).toBe(400);
+    expect(missing.body.issues.map((i: { path: string }) => i.path).sort()).toEqual(['api_hash', 'api_id']);
+    const badHash = await request('POST', '/api/instances', {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { ...body, api_id: '12345', api_hash: "abc'; rm -rf /" },
+    });
+    expect(badHash.status).toBe(400);
+
+    const res = await request('POST', '/api/instances', {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { ...body, api_id: '12345', api_hash: 'A'.repeat(32) },
+    });
+    expect(res.status).toBe(202);
+    const id = res.body.instance.id as number;
+    let inst = res.body.instance;
+    for (let i = 0; i < 50 && inst.status === 'provisioning'; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      inst = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+    }
+    expect(inst.last_error).toBeNull();
+    expect(inst.status).toBe('running');
+    expect(inst.app_port).toBe(20000 + id);
+    expect(inst.source_commit).toBe(PROVIDERS.pasarguard.commit);
+
+    // The bot's own code runs only through the helper's steps, in this order.
+    const steps = tools.calls.service.filter((c) => c === 'runtime' || c.startsWith('pasar-bot:'));
+    expect(steps).toEqual([
+      'runtime',
+      'pasar-bot:python-deps',
+      'pasar-bot:webapp-build',
+      'pasar-bot:python-migrate',
+      `pasar-bot:service:pasar.example.com:${20000 + id}`,
+      `pasar-bot:wait:${20000 + id}`,
+    ]);
+    const dir = path.join(tmp, 'instances', 'pasar-bot');
+    const env = Object.fromEntries((tools.calls.env['pasar-bot'] ?? '').split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    expect(env).toMatchObject({
+      BOT_TOKEN: TOKEN,
+      API_ID: '12345',
+      API_HASH: 'a'.repeat(32),
+      ADMIN_ID: '42',
+      FASTAPI_PORT: String(20000 + id),
+      REDIS_URL: `unix://${dir}/data/redis/redis.sock`,
+      WEBAPP_URL: 'https://pasar.example.com/webapp',
+    });
+    expect(env.SQLALCHEMY_DATABASE_URL).toMatch(/^mysql\+asyncmy:\/\/fp_pasar_bot:[A-Za-z0-9]+@localhost\/fp_pasar_bot\?unix_socket=\/run\/mysqld\/mysqld\.sock$/);
+    // Every line must pass the helper's own checks (allowlisted key, shell-safe value). The test
+    // runs in a temp dir; on a server the instance lives under /opt/fleetpanel/instances.
+    const serverEnv = (tools.calls.env['pasar-bot'] ?? '').replaceAll(dir, '/opt/fleetpanel/instances/pasar-bot');
+    for (const line of serverEnv.split('\n')) {
+      expect(line).toMatch(/^(BOT_TOKEN|API_ID|API_HASH|ADMIN_ID|SQLALCHEMY_DATABASE_URL|FASTAPI_PORT|REDIS_URL|REDIS_NAMESPACE_PREFIX|LOG_DIR|TELETHON_SESSION_PATH|WEBAPP_URL)=[A-Za-z0-9_.:/@+%=?,-]{0,255}$/);
+    }
+    for (const sub of ['workdir', 'logs', 'sessions', 'data/redis']) expect(fs.existsSync(path.join(dir, sub))).toBe(true);
+    expect(tools.calls.sql).toContain('SELECT COUNT(*) FROM alembic_version;');
+    // No webhook: an old one is cleared instead, and no PHP site is created.
+    expect(clearedWebhooks).toContain(TOKEN);
+    expect(webhooks.some((u) => u.includes('pasar.example.com'))).toBe(false);
+    expect(createdSites.some((s) => s.slug === 'pasar-bot')).toBe(false);
+  });
+
   it('reports real host stats and providers', async () => {
     const { cookie } = await login('viewer', 'Viewer-Password-1');
     const sys = await request('GET', '/api/system', { headers: { cookie } });
@@ -356,7 +426,8 @@ describe('API security', () => {
     expect(sys.body.memory.total_bytes).toBeGreaterThan(0);
     expect(sys.body.instances.running).toBeGreaterThanOrEqual(1);
     const providers = await request('GET', '/api/system/providers', { headers: { cookie } });
-    expect(providers.body.providers.map((p: { id: string }) => p.id)).toEqual(['mirza', 'faoxima']);
+    expect(providers.body.providers.map((p: { id: string }) => p.id)).toEqual(['mirza', 'faoxima', 'pasarguard']);
+    expect(providers.body.providers[2]).toMatchObject({ runtime: 'python', extra_fields: ['api_id', 'api_hash'] });
     for (const p of providers.body.providers as Array<{ commit: string; version: string }>) {
       expect(p.commit).toMatch(/^[0-9a-f]{40}$/);
       expect(p.version).toBeTruthy();

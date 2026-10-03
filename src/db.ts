@@ -86,6 +86,8 @@ const MIGRATIONS: string[] = [
   `,
   // v0.3.3: which pinned upstream commit each instance runs.
   `ALTER TABLE instances ADD COLUMN source_commit TEXT;`,
+  // v0.4.0: loopback port of a service bot's web server.
+  `ALTER TABLE instances ADD COLUMN app_port INTEGER;`,
 ];
 
 export function openDb(file: string = path.join(config.dataDir, 'fleetpanel.db')): DB {

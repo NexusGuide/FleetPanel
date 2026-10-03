@@ -11,6 +11,7 @@ import { withClientConfig } from '../system/toolchain.js';
 import { randomToken } from '../security/crypto.js';
 import { HttpError, errorMessage } from '../errors.js';
 import { instanceDir, type InstanceRow } from './instances.js';
+import { PROVIDERS } from '../providers/index.js';
 
 export type BackupKind = 'manual' | 'pre-delete' | 'pre-restore';
 
@@ -26,6 +27,14 @@ export interface BackupRow {
 }
 
 export const BACKUP_ID_RE = /^\d{8}T\d{6}Z-[A-Za-z0-9]{8}$/;
+
+/**
+ * Rebuildable or transient parts of an instance, left out of archives: a service bot's virtualenv
+ * and package caches (hundreds of MB; restore rebuilds the virtualenv) and its Redis socket.
+ */
+export function backupExcludes(slug: string): string[] {
+  return ['.venv', '.cache', 'frontend/node_modules', 'data/redis/redis.sock'].map((rel) => `--exclude=${slug}/${rel}`);
+}
 
 async function sha256File(file: string): Promise<string> {
   const hash = crypto.createHash('sha256');
@@ -141,7 +150,7 @@ export class BackupService {
         created_at: new Date().toISOString(),
       };
       await fs.writeFile(path.join(work, 'manifest.json'), JSON.stringify(manifest, null, 2));
-      await run('tar', ['-czf', dest, '-C', this.d.instancesDir, inst.slug, '-C', work, 'database.sql', 'manifest.json'], {
+      await run('tar', ['-czf', dest, ...backupExcludes(inst.slug), '-C', this.d.instancesDir, inst.slug, '-C', work, 'database.sql', 'manifest.json'], {
         timeoutMs: 900_000,
       });
       await fs.chmod(dest, 0o600);
@@ -215,6 +224,8 @@ export class BackupService {
         run('mysql', [`--defaults-extra-file=${cnf}`, '--binary-mode', inst.db_name], { input: sql, timeoutMs: 900_000 }),
       );
       await this.d.ops.fixPermissions(inst.slug);
+      // The archive has no virtualenv (see backupExcludes); rebuild it from the lock file.
+      if (PROVIDERS[inst.provider].runtime === 'python') await this.d.ops.runTask(inst.slug, 'python-deps');
       await this.d.ops.enableInstance(inst.slug);
       await fs.rm(previous, { recursive: true, force: true });
       this.d.audit.write({

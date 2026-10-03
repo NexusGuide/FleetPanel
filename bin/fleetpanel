@@ -32,6 +32,7 @@ Service
   doctor                     Check the whole host and report PASS / WARN / FAIL
   start | stop | restart     Control the panel service (bots keep running)
   logs [N] [-f]              Last N log lines (default 100); -f follows
+  logs SLUG [N] [-f]         Log of a Python bot (PasarguardBot)
 
 Instances and backups
   instances                  List bot instances
@@ -308,6 +309,15 @@ cmd_doctor() {
     errors=0
     while IFS=$'\t' read -r slug _ _ status _; do
       [[ $status == error ]] && { errors=$((errors + 1)); warn "Instance $slug is in the error state (see the panel for the reason)"; }
+      # Service bots (Python) run as their own systemd unit: a running bot must have it active.
+      if [[ $status == running && -f /etc/systemd/system/fleetpanel-bot-$slug.service ]]; then
+        if systemctl is-active --quiet "fleetpanel-bot-$slug.service"; then
+          pass "Bot service of $slug is running"
+        else
+          errors=$((errors + 1))
+          fail "Bot service of $slug is not running (journalctl -u fleetpanel-bot-$slug -n 50)"
+        fi
+      fi
     done < <(app_cli list-instances --tsv 2>/dev/null || true)
     line="$(app_cli list-instances --tsv 2>/dev/null | wc -l || echo 0)"
     (( errors == 0 )) && pass "$line instance(s), none in the error state"
@@ -321,14 +331,19 @@ cmd_doctor() {
 }
 
 cmd_logs() {
-  local lines=100 follow=()
+  local lines=100 follow=() unit="$SERVICE"
   for arg in "$@"; do
     case "$arg" in
       -f|--follow) follow=(-f) ;;
-      *) [[ $arg =~ ^[0-9]{1,6}$ ]] || die "usage: fleetpanel logs [N] [-f]"; lines="$arg" ;;
+      *)
+        if [[ $arg =~ ^[0-9]{1,6}$ ]]; then lines="$arg"
+        # A service bot (Python) logs to the journal under its own unit.
+        elif [[ $arg =~ ^[a-z][a-z0-9-]{1,27}[a-z0-9]$ && -f /etc/systemd/system/fleetpanel-bot-$arg.service ]]; then unit="fleetpanel-bot-$arg.service"
+        else die "usage: fleetpanel logs [SLUG] [N] [-f]   (SLUG: a Python bot)"; fi
+        ;;
     esac
   done
-  journalctl -u "$SERVICE" -n "$lines" --no-pager "${follow[@]}"
+  journalctl -u "$unit" -n "$lines" --no-pager "${follow[@]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -445,6 +460,7 @@ cmd_uninstall() {
       "$HELPER" db-drop "$db" "$user" || echo "  (could not drop database $db)" >&2
     done
     rm -f /etc/nginx/conf.d/fleetpanel.conf
+    rm -rf /usr/local/lib/fleetpanel
   fi
   if nginx -t >/dev/null 2>&1; then systemctl reload nginx || true; fi
 

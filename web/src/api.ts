@@ -33,6 +33,7 @@ export interface Instance {
   bot_username: string | null;
   admin_telegram_id: string;
   source_commit: string | null;
+  app_port: number | null;
   status: InstanceStatus;
   last_error: string | null;
   created_at: string;
@@ -100,6 +101,9 @@ export interface Provider {
   repo_url: string;
   version: string;
   commit: string;
+  /** php: served by PHP-FPM with a Telegram webhook; python: a long-running service. */
+  runtime: 'php' | 'python';
+  extra_fields: Array<'api_id' | 'api_hash'>;
 }
 
 export interface InstanceCheck {
@@ -113,6 +117,8 @@ export interface CreateInstanceInput {
   domain: string;
   bot_token: string;
   admin_telegram_id: string;
+  api_id?: string;
+  api_hash?: string;
 }
 
 // Mirrors src/security/validation.ts so forms can explain problems before submitting.
@@ -121,6 +127,8 @@ export const DOMAIN_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\
 export const BOT_TOKEN_RE = /^\d{5,15}:[A-Za-z0-9_-]{30,64}$/;
 export const TELEGRAM_ID_RE = /^\d{1,20}$/;
 export const USERNAME_RE = /^[A-Za-z0-9_.-]{3,32}$/;
+export const API_ID_RE = /^\d{3,12}$/;
+export const API_HASH_RE = /^[0-9a-f]{32}$/;
 
 /** Same rules as the server's passwordPolicyErrors(). */
 export function passwordProblems(password: string): string[] {

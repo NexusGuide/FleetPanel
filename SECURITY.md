@@ -63,6 +63,6 @@ Implementation details: [docs/security.md](docs/security.md).
 
 - Rate-limit counters are in memory and reset on restart.
 - Provider config templates follow each upstream project; FleetPanel fails provisioning loudly if they change.
-- The bots themselves (MirzaBot, Faoxima) are third-party code: FleetPanel isolates them from each other and
+- The bots themselves (MirzaBot, Faoxima, PasarguardBot) are third-party code: FleetPanel isolates them from each other and
   from the panel, but cannot fix vulnerabilities inside them.
 - Restoring a backup into a *deleted* instance is not supported yet.

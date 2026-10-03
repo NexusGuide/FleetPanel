@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ROLES } from './rbac.js';
-import { PROVIDER_IDS } from '../providers/index.js';
+import { PROVIDERS, PROVIDER_IDS } from '../providers/index.js';
 
 // Keep these in sync with deploy/fleetpanel-helper, which re-validates as root.
 export const SLUG_RE = /^[a-z][a-z0-9-]{1,27}[a-z0-9]$/;
@@ -8,6 +8,8 @@ export const DOMAIN_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\
 export const BOT_TOKEN_RE = /^\d{5,15}:[A-Za-z0-9_-]{30,64}$/;
 export const TELEGRAM_ID_RE = /^\d{1,20}$/;
 export const USERNAME_RE = /^[A-Za-z0-9_.-]{3,32}$/;
+export const API_ID_RE = /^\d{3,12}$/;
+export const API_HASH_RE = /^[0-9a-f]{32}$/;
 
 export const createInstanceSchema = z
   .object({
@@ -25,8 +27,24 @@ export const createInstanceSchema = z
       .union([z.string(), z.number().int().nonnegative()])
       .transform((v) => String(v).trim())
       .pipe(z.string().regex(TELEGRAM_ID_RE, 'admin_telegram_id must be a numeric Telegram user id')),
+    api_id: z
+      .union([z.string(), z.number().int().nonnegative()])
+      .transform((v) => String(v).trim())
+      .pipe(z.string().regex(API_ID_RE, 'api_id must be the numeric App api_id from my.telegram.org'))
+      .optional(),
+    api_hash: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(API_HASH_RE, 'api_hash must be the 32-character App api_hash from my.telegram.org')
+      .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((v, ctx) => {
+    for (const field of PROVIDERS[v.provider].extraFields) {
+      if (!v[field]) ctx.addIssue({ code: 'custom', path: [field], message: `${field} is required for ${PROVIDERS[v.provider].displayName}` });
+    }
+  });
 export type CreateInstanceInput = z.infer<typeof createInstanceSchema>;
 
 export const loginSchema = z

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.4.0
+
+### Added
+- **PasarguardBot** ([AmirKenzo/PasarguardBot](https://github.com/AmirKenzo/PasarguardBot) `v2.1.4`), the
+  first Python bot. It runs as its own sandboxed systemd service (`fleetpanel-bot-<slug>`) with its own
+  Redis on a private Unix socket, behind nginx with TLS. The create wizard asks for the Telegram API id
+  and hash it needs (my.telegram.org). The first one on a server installs a pinned, checksum-verified
+  Python runtime (uv `0.11.31`, Python 3.14, bun `1.4.2`) and Redis.
+- `fleetpanel logs SLUG` shows a Python bot's log; `fleetpanel doctor` checks that running Python bots'
+  services are active.
+
+### Security
+- Reviewed PasarguardBot `v2.1.4` before pinning it. FleetPanel works around what it can: the bot's web
+  server is forced onto 127.0.0.1 (upstream binds 0.0.0.0, which would expose its API without TLS) and
+  provisioning stops it if it listens elsewhere; its API documentation is hidden; it runs from a separate
+  working directory; its secrets live in a root-only environment file with allowlisted keys.
+- Provisioning errors and stored `last_error` texts mask database URL passwords and API hashes, as well
+  as bot tokens.
+
+### Changed
+- Backups leave out virtualenvs, package caches and Redis sockets; restoring a Python bot rebuilds its
+  virtualenv from `uv.lock`.
+
+### Upgrading
+`sudo fleetpanel update`. Existing MirzaBot and Faoxima bots are not changed.
+
 ## v0.3.3
 
 ### Security

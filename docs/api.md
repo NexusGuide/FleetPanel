@@ -63,7 +63,8 @@ X-CSRF-Token: …
 ```
 
 - `slug`: 3–29 characters, lowercase letters, digits and `-`, starting with a letter
-- `provider`: `mirza` or `faoxima`
+- `provider`: `mirza`, `faoxima` or `pasarguard`
+- `api_id`, `api_hash`: required for `pasarguard` (Telegram API credentials from my.telegram.org)
 - `domain`: must already resolve to the server (a certificate is issued and the webhook uses HTTPS)
 
 The bot token is checked with Telegram first. Duplicates are rejected with a message naming the existing

@@ -165,6 +165,11 @@ export function InstanceDrawer({
                   </Row>
                   <Row label="Database user">{inst.db_user}</Row>
                   <Row label="Linux user">fp-{inst.slug}</Row>
+                  {inst.app_port !== null && (
+                    <Row label="Service">
+                      fleetpanel-bot-{inst.slug} · 127.0.0.1:{inst.app_port}
+                    </Row>
+                  )}
                   <Row label="Files">/opt/fleetpanel/instances/{inst.slug}</Row>
                   <Row label="Created">{formatDate(inst.created_at)}</Row>
                   <Row label="Last change">
