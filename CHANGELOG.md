@@ -15,6 +15,8 @@ Test build: follow it with `sudo fleetpanel channel dev && sudo fleetpanel updat
   services are active.
 - Installing a Python bot only succeeds once its web server answers and its Telegram client has not
   failed; otherwise the panel shows the bot's error (for example a wrong API id/hash).
+- Menu item 9 (*Version / update channel*) lets you pick the channel from a list (stable `main`, test
+  builds on `dev`, or one released version) and update right away, instead of typing a ref.
 - `fleetpanel update` warns before restarting the panel while a bot is being installed or deleted, and
   bot install steps are the first to go if memory runs out, never the panel or other bots.
 
