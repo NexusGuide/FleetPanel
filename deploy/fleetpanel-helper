@@ -358,9 +358,15 @@ write_pyrun() {
 
 Some bots hard-code uvicorn's host to 0.0.0.0, which would publish their API on every
 interface without TLS. nginx is the only way in, so the host is forced to 127.0.0.1.
+
+It also logs background tasks that die with an exception: a bot that starts its Telegram
+client with asyncio.create_task() and only awaits it at shutdown would otherwise hang
+silently when, for example, its API id/hash is wrong.
 """
+import asyncio
 import runpy
 import sys
+import traceback
 
 import uvicorn
 
@@ -373,6 +379,25 @@ def _loopback_only(self, *args, **kwargs):
 
 
 uvicorn.Config.__init__ = _loopback_only
+
+_create_task = asyncio.create_task
+
+
+def _report_failure(task):
+    if task.cancelled() or task.exception() is None:
+        return
+    print(f"FleetPanel: background task {task.get_name()} failed:", file=sys.stderr)
+    traceback.print_exception(task.exception(), file=sys.stderr)
+    sys.stderr.flush()
+
+
+def _create_logged_task(coro, **kwargs):
+    task = _create_task(coro, **kwargs)
+    task.add_done_callback(_report_failure)
+    return task
+
+
+asyncio.create_task = _create_logged_task
 
 script = sys.argv[1]
 sys.argv = sys.argv[1:]
@@ -586,7 +611,7 @@ EOF
 # Waits until the bot's web server answers on loopback and listens nowhere else.
 cmd_service_wait() {
   need_args $# 2
-  local slug="$1" port="$2" unit i listeners
+  local slug="$1" port="$2" unit i listeners invocation
   check_slug "$slug"
   [[ $port =~ $RE_PORT ]] || die "invalid port"
   unit="$(bot_unit "$slug")"
@@ -596,6 +621,14 @@ cmd_service_wait() {
       if [[ -n $listeners ]]; then
         systemctl stop "$unit" || true
         die "the bot also listens on a public address ($listeners); it was stopped"
+      fi
+      # The web server can be up while the Telegram client (a background task) has already died;
+      # the launcher logs that as "FleetPanel: background task ... failed". Give it time to log in.
+      sleep 15
+      invocation="$(systemctl show -p InvocationID --value "$unit" 2>/dev/null || true)"
+      if [[ -n $invocation ]] && journalctl "_SYSTEMD_INVOCATION_ID=$invocation" -o cat --no-pager 2>/dev/null | grep -q '^FleetPanel: background task'; then
+        journalctl "_SYSTEMD_INVOCATION_ID=$invocation" -o cat --no-pager 2>/dev/null | grep -A 12 '^FleetPanel: background task' | tail -n 14 >&2 || true
+        die "the bot's web server started but its connection to Telegram failed (see above; check the API id/hash and that this server can reach Telegram)"
       fi
       return 0
     fi
