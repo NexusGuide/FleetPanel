@@ -127,7 +127,13 @@ function BackupCard({ current, onSaved }: { current: BackupSettings; onSaved: ()
       <CardHeader
         title="Telegram backup"
         icon={<UploadCloud className="w-4 h-4 text-blue-400" />}
-        actions={current.enabled ? <Pill tone="green">on</Pill> : <Pill>off</Pill>}
+        actions={
+          current.enabled ? (
+            <Pill tone="green">auto: {SCHEDULES.find(([v]) => v === current.schedule)?.[1].toLowerCase()}</Pill>
+          ) : (
+            <Pill>auto: off</Pill>
+          )
+        }
       />
       <form onSubmit={save} className="p-4 space-y-4">
         {error && <ErrorBanner error={error} />}
