@@ -4,6 +4,7 @@ import { requirePermission } from '../middleware.js';
 import { rateLimit } from '../rateLimit.js';
 import { actorOf, ah, intParam } from '../util.js';
 import { createInstanceSchema } from '../../security/validation.js';
+import { HttpError } from '../../errors.js';
 
 export function instanceRoutes(d: AppDeps): Router {
   const r = Router();
@@ -67,6 +68,19 @@ export function instanceRoutes(d: AppDeps): Router {
     ah(async (req, res) => {
       await d.instances.remove(intParam(req, 'id'), actorOf(req), req.query.backup !== 'false');
       res.json({ ok: true });
+    }),
+  );
+
+  // Body: the raw file (application/octet-stream), streamed to disk; see services/dbImport.ts.
+  const imports = rateLimit({ limit: 6, windowMs: 15 * 60_000, key: (req) => `imp|${req.auth?.adminId ?? req.ip}` });
+  r.post(
+    '/:id/import-db',
+    requirePermission('backups.restore', d.audit),
+    imports,
+    ah(async (req, res) => {
+      const id = intParam(req, 'id');
+      if (!req.is('application/octet-stream')) throw new HttpError(415, 'unsupported_media_type', 'Send the file as application/octet-stream.');
+      res.json(await d.instances.importDatabase(id, req, actorOf(req)));
     }),
   );
 

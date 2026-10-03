@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.0-beta.2 (dev channel)
+
+### Added
+- **Encrypted Telegram backups of the panel** (*Settings → Telegram backup*, Owner only): the panel database
+  and master key as an encrypted `.fleet` file, sent to a chat, group, channel or forum topic every hour,
+  6 hours or day, only when something changed and at least daily. *Download* gives a fresh file.
+  Encryption: X25519 + AES-256-GCM; the private key is protected by a recovery passphrase (scrypt) that the
+  server never stores, so neither the chat nor a compromised server can open the backups.
+- `sudo fleetpanel restore FILE.fleet` restores such a backup (asks for the passphrase). Bots whose files
+  are missing on the server are then marked *"not installed on this server"* for **Repair**.
+- **Import database** in a bot's details: replace its database with one of the bot's own backups
+  (`.sql`, `.sql.gz` or a `.zip` with one `.sql`, up to 512 MB). A safety backup is taken first; the dump
+  is checked (no mysql client commands) and rewritten (no `CREATE DATABASE`/`USE`/`DEFINER`) and imported
+  as the bot's own database user; FleetPanel's schema, webhook secret and webhook are reapplied.
+- [Disaster recovery guide](docs/backup.md).
+
+### Changed
+- New permission `settings.manage` (Owner only).
+- The panel's nginx site accepts large uploads on the database-import path only (`fleetpanel update`
+  adds it to existing installs and keeps the old file if `nginx -t` rejects the change).
+
 ## v0.4.0-beta.1 (dev channel)
 
 Test build: follow it with `sudo fleetpanel channel dev && sudo fleetpanel update`. It moves to the stable

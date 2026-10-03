@@ -1,10 +1,11 @@
-import { useEffect, type ReactNode } from 'react';
-import { Archive, Copy, ExternalLink, Loader2, X } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Archive, Copy, DatabaseBackup, ExternalLink, Loader2, X } from 'lucide-react';
 import { api, instanceWebUrl, type Instance, type Permission } from '../api';
-import { ErrorBanner, Notice, Spinner, StatusBadge, Time, formatDate, useResource, useToast } from '../components/ui';
+import { Button, ErrorBanner, Notice, Spinner, StatusBadge, Time, formatDate, useResource, useToast } from '../components/ui';
 import { InstanceActionButtons } from './InstancesPage';
 import { useInstanceActions } from './instanceActions';
 import { BackupTable } from './BackupsPage';
+import { ImportDatabaseModal } from './ImportDatabaseModal';
 
 function Row({ label, children, copy }: { label: string; children: ReactNode; copy?: string }) {
   const toast = useToast();
@@ -70,6 +71,7 @@ export function InstanceDrawer({
   const fetched = useResource(() => api.instance(instanceId), [instanceId]);
   const providers = useResource(api.providers, []);
   const inst = instance ?? fetched.data;
+  const [importing, setImporting] = useState(false);
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
@@ -175,6 +177,11 @@ export function InstanceDrawer({
                     <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
                       <Archive className="w-3.5 h-3.5" /> Backups
                     </h3>
+                    {can('backups.restore') && (inst.status === 'running' || inst.status === 'stopped') && (
+                      <Button size="sm" icon={<DatabaseBackup className="w-3 h-3" />} onClick={() => setImporting(true)}>
+                        Import database
+                      </Button>
+                    )}
                   </div>
                   <div className="rounded-lg bg-panel border border-slate-800/80 overflow-hidden">
                     {backups.error ? (
@@ -201,6 +208,16 @@ export function InstanceDrawer({
           )}
         </div>
       </aside>
+      {importing && inst && (
+        <ImportDatabaseModal
+          inst={inst}
+          onClose={() => setImporting(false)}
+          onDone={() => {
+            void backups.reload();
+            api.instance(inst.id).then(onChanged, () => undefined);
+          }}
+        />
+      )}
     </div>
   );
 }

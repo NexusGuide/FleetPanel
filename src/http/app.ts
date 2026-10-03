@@ -12,6 +12,7 @@ import { adminRoutes } from './routes/admins.js';
 import { instanceRoutes } from './routes/instances.js';
 import { backupRoutes } from './routes/backups.js';
 import { systemRoutes } from './routes/system.js';
+import { settingsRoutes } from './routes/settings.js';
 import { HttpError } from '../errors.js';
 import { CommandError } from '../system/exec.js';
 import { log } from '../log.js';
@@ -65,6 +66,7 @@ export function createApp(d: AppDeps): express.Express {
   app.use('/api/instances', instanceRoutes(d));
   app.use('/api/backups', backupRoutes(d));
   app.use('/api/system', systemRoutes(d));
+  app.use('/api/settings', settingsRoutes(d));
 
   app.get('/api/audit-logs', requirePermission('audit.read', d.audit), (req, res) => {
     const limit = Math.min(Math.max(Number.parseInt(String(req.query.limit ?? '100'), 10) || 100, 1), 500);

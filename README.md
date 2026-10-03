@@ -56,7 +56,8 @@ Every number and state in the panel comes from the server; nothing is simulated.
 - **Dashboard:** instance counts, server CPU load, memory and disk, recent activity
 - **Instances:** a guided create wizard, start, stop, backup, **repair/reprovision**, delete (with a
   pre-delete backup). If an install fails, the panel shows the failing step and the real error.
-- **Backups:** list, restore (a safety backup is taken first), delete
+- **Backups:** list, restore (a safety backup is taken first), delete; **import a bot's own database backup**
+- **Settings:** encrypted panel backups to Telegram on a schedule ([disaster recovery](docs/backup.md))
 - **Administrators** (Owner only), **audit log** and **my account** (password, sessions)
 
 Creating a bot: point its domain's DNS at the server, then *New instance* → choose MirzaBot, Faoxima or
@@ -119,6 +120,7 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 | `fleetpanel backups [SLUG]` | List instance backups and control-plane backups |
 | `fleetpanel backup` | Back up the control plane: panel database **and master key** |
 | `fleetpanel backup SLUG` | Back up one instance (files + database dump) |
+| `fleetpanel restore FILE.fleet` | Restore an encrypted panel backup (e.g. from Telegram; asks for the passphrase) |
 | `fleetpanel restore FILE.tar.gz` | Restore a control-plane backup (safety backup first) |
 | `fleetpanel restore BACKUP_ID` | Restore an instance backup (safety backup first) |
 | `fleetpanel admins` / `create-admin` / `reset-password` | Manage administrators from the server |
@@ -227,6 +229,7 @@ CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](
 - [CLI reference](docs/cli.md)
 - [REST API](docs/api.md)
 - [Bot providers](docs/providers.md)
+- [Backups and disaster recovery](docs/backup.md)
 - [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
 ## 📄 License

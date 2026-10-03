@@ -45,6 +45,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | `fleetpanel backups [SLUG]` | Lists instance backups (all, or one instance) and control-plane backup files. |
 | `fleetpanel backup` | **Control-plane backup:** a consistent copy of the panel database plus the master key, as `/opt/fleetpanel/backups/control-plane-<time>.tar.gz` (mode 600). Copy it off the server: anyone holding it can decrypt the stored bot tokens. |
 | `fleetpanel backup SLUG` | Backs up one instance: its files and a `mysqldump` of its database. Same format as backups taken in the panel. |
+| `fleetpanel restore FILE.fleet` | Decrypts an encrypted panel backup (from *Settings → Telegram backup* or *Download*) with the recovery passphrase, then restores it like a control-plane backup. Bots missing on this server are marked for Repair; see [backup.md](backup.md). |
 | `fleetpanel restore FILE.tar.gz` | Restores a control-plane backup. Asks you to type `RESTORE`, takes a safety backup of the current state, replaces the database and master key, and starts the panel; if it does not become healthy, the safety backup is put back. Bot files and databases are not touched. |
 | `fleetpanel restore BACKUP_ID` | Restores an instance backup (IDs from `fleetpanel backups`). A pre-restore safety backup is taken first; files are rolled back if the restore fails. |
 

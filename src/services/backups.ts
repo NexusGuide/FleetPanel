@@ -104,6 +104,11 @@ export interface BackupServiceDeps {
 export class BackupService {
   constructor(private readonly d: BackupServiceDeps) {}
 
+  /** A private scratch directory next to the backups (same disk, room for large files). */
+  workDir(prefix: string): Promise<string> {
+    return fs.mkdtemp(path.join(this.d.backupsDir, `.${prefix}-`));
+  }
+
   list(instanceId?: number): BackupRow[] {
     const stmt =
       instanceId === undefined

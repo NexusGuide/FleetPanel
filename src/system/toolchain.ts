@@ -13,6 +13,8 @@ export interface DbCredentials {
 export interface Toolchain {
   /** Runs SQL as the instance's own database user and returns tab-separated output without headers. */
   sql(db: DbCredentials, sql: string): Promise<string>;
+  /** Imports a (sanitized) dump file into the instance's database as its own database user. */
+  importDump(db: DbCredentials, file: string): Promise<void>;
 }
 
 /** Writes a throwaway my.cnf so the DB password never appears in argv. */
@@ -34,5 +36,14 @@ export const systemToolchain: Toolchain = {
       run('mysql', [`--defaults-extra-file=${cnf}`, '--batch', '--skip-column-names', db.dbName], { input: sql, timeoutMs: 120_000 }),
     );
     return stdout;
+  },
+  async importDump(db, file) {
+    await withClientConfig(db, (cnf) =>
+      // --binary-mode turns off mysql client commands (\!, system, ...) in the input.
+      run('mysql', [`--defaults-extra-file=${cnf}`, '--binary-mode', '--default-character-set=utf8mb4', db.dbName], {
+        inputFile: file,
+        timeoutMs: 3_600_000,
+      }),
+    );
   },
 };

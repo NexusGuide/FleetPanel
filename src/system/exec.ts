@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { maskSecrets } from '../security/mask.js';
 
@@ -9,6 +10,8 @@ export interface ExecResult {
 
 export interface ExecOptions {
   input?: string;
+  /** Streams this file to stdin instead of `input` (large inputs such as database dumps). */
+  inputFile?: string;
   cwd?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
@@ -60,6 +63,12 @@ export function run(cmd: string, args: readonly string[], opts: ExecOptions = {}
         resolve({ stdout, stderr });
       },
     );
-    child.stdin?.end(opts.input ?? '');
+    if (opts.inputFile && child.stdin) {
+      // The program may exit before reading everything (e.g. a SQL error); that is reported via its exit code.
+      child.stdin.on('error', () => undefined);
+      createReadStream(opts.inputFile).pipe(child.stdin);
+    } else {
+      child.stdin?.end(opts.input ?? '');
+    }
   });
 }
