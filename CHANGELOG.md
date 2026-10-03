@@ -10,6 +10,10 @@
   Python runtime (uv `0.11.31`, Python 3.14, bun `1.4.2`) and Redis.
 - `fleetpanel logs SLUG` shows a Python bot's log; `fleetpanel doctor` checks that running Python bots'
   services are active.
+- Installing a Python bot only succeeds once its web server answers and its Telegram client has not
+  failed; otherwise the panel shows the bot's error (for example a wrong API id/hash).
+- `fleetpanel update` warns before restarting the panel while a bot is being installed or deleted, and
+  bot install steps are the first to go if memory runs out, never the panel or other bots.
 
 ### Security
 - Reviewed PasarguardBot `v2.1.4` before pinning it. FleetPanel works around what it can: the bot's web
