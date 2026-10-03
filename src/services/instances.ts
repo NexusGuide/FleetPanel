@@ -75,6 +75,14 @@ export interface InstanceServiceDeps {
 /** Directories a service bot writes to; created by the control plane before ownership is handed over. */
 const SERVICE_DIRS = ['workdir', 'logs', 'sessions', 'data/redis'];
 
+/**
+ * Some bots (python-decouple with RepositoryEnv(".env")) refuse to start without a .env file in their
+ * working directory, although real environment variables win over it. These stay empty: the secrets
+ * live in the root-only environment file, so the bot's own backups (which zip .env) carry none.
+ */
+const ENV_PLACEHOLDERS = ['.env', 'workdir/.env'];
+const ENV_PLACEHOLDER_TEXT = '# Managed by FleetPanel: settings come from the service environment, not this file.\n';
+
 /** KEY=value lines for the helper's instance-env command. */
 function envFile(env: Record<string, string>): string {
   return Object.entries(env)
@@ -358,6 +366,7 @@ export class InstanceService {
     await step('Writing the bot configuration', async () => {
       await this.d.ops.writeEnv(inst.slug, envFile(provider.renderEnv(ctx)));
       for (const rel of SERVICE_DIRS) await fs.mkdir(path.join(dir, rel), { recursive: true });
+      for (const rel of ENV_PLACEHOLDERS) await fs.writeFile(path.join(dir, rel), ENV_PLACEHOLDER_TEXT);
     });
     // Everything below runs the bot's own code: as its Linux user, never as the control plane.
     await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));

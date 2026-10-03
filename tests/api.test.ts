@@ -412,6 +412,12 @@ describe('API security', () => {
       expect(line).toMatch(/^(BOT_TOKEN|API_ID|API_HASH|ADMIN_ID|SQLALCHEMY_DATABASE_URL|FASTAPI_PORT|REDIS_URL|REDIS_NAMESPACE_PREFIX|LOG_DIR|TELETHON_SESSION_PATH|WEBAPP_URL)=[A-Za-z0-9_.:/@+%=?,-]{0,255}$/);
     }
     for (const sub of ['workdir', 'logs', 'sessions', 'data/redis']) expect(fs.existsSync(path.join(dir, sub))).toBe(true);
+    // The bot needs a .env to exist; it must stay free of secrets (the bot zips it into its own backups).
+    for (const rel of ['.env', 'workdir/.env']) {
+      const text = fs.readFileSync(path.join(dir, rel), 'utf8');
+      expect(text).not.toContain(TOKEN);
+      expect(text.split('\n').every((l) => l === '' || l.startsWith('#'))).toBe(true);
+    }
     expect(tools.calls.sql).toContain('SELECT COUNT(*) FROM alembic_version;');
     // No webhook: an old one is cleared instead, and no PHP site is created.
     expect(clearedWebhooks).toContain(TOKEN);
