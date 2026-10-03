@@ -39,6 +39,7 @@ Instances and backups
   backups [SLUG]             List instance backups and control-plane backups
   backup                     Back up the control plane (database + master key)
   backup SLUG                Back up one instance (files + database)
+  restore FILE.fleet         Restore an encrypted backup (e.g. from Telegram; asks for the passphrase)
   restore FILE.tar.gz        Restore a control-plane backup
   restore BACKUP_ID          Restore an instance backup (safety backup first)
 
@@ -112,6 +113,42 @@ build() {
 version_lt() {
   local a="${1/-/\~}" b="${2/-/\~}"
   [[ $a != "$b" && "$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -n 1)" == "$a" ]]
+}
+
+# Panels installed before v0.4.0-beta.2 accept 1 MB request bodies everywhere. Add the large-upload
+# location for bot database imports once, keeping the old file if nginx rejects the result.
+ensure_panel_uploads() {
+  [[ -f $PANEL_SITE ]] || return 0
+  grep -q 'import-db' "$PANEL_SITE" && return 0
+  local tmp
+  tmp="$(mktemp)"
+  awk '
+    !done && /^[[:space:]]*location \/ \{/ {
+      print "    # Bot database imports (Instances -> Import database): large uploads on this path only."
+      print "    location ~ ^/api/instances/[0-9]+/import-db$ {"
+      print "        client_max_body_size 512m;"
+      print "        proxy_request_buffering off;"
+      print "        proxy_pass http://127.0.0.1:3000;"
+      print "        proxy_http_version 1.1;"
+      print "        proxy_set_header Host $http_host;"
+      print "        proxy_set_header X-Real-IP $remote_addr;"
+      print "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
+      print "        proxy_set_header X-Forwarded-Proto $scheme;"
+      print "        proxy_read_timeout 1800s;"
+      print "    }"
+      print ""
+      done = 1
+    }
+    { print }' "$PANEL_SITE" > "$tmp"
+  cp -p "$PANEL_SITE" "$tmp.orig"
+  cat "$tmp" > "$PANEL_SITE"
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx || true
+  else
+    cat "$tmp.orig" > "$PANEL_SITE"
+    echo "${C_WARN}Could not enable large database uploads in $PANEL_SITE (nginx -t failed); left unchanged.${C_0}" >&2
+  fi
+  rm -f "$tmp" "$tmp.orig"
 }
 
 install_system_files() {
@@ -188,6 +225,7 @@ cmd_update() {
   mv "$APP_DIR" "$previous"
   mv "$staging" "$APP_DIR"
   install_system_files "$APP_DIR"
+  ensure_panel_uploads
   systemctl start "$SERVICE"
 
   if ! healthy; then
@@ -447,7 +485,7 @@ restore_control_plane() {
   work="$(mktemp -d)"
   # The extracted copy holds the master key: remove it however this command ends (die exits).
   RESTORE_WORK="$work"
-  trap 'rm -rf "$RESTORE_WORK"' EXIT
+  trap 'rm -rf "$RESTORE_WORK" "${FLEET_WORK:-}"' EXIT
   tar -xzf "$file" -C "$work" --no-same-owner
   # Runs as root: a crafted archive could ship these names as symlinks (e.g. to /etc/shadow).
   local f
@@ -473,10 +511,27 @@ restore_control_plane() {
   fi
 }
 
+# An encrypted backup (.fleet, e.g. from Telegram): decrypt with the recovery passphrase, then
+# restore it like a local control-plane backup.
+restore_fleet() {
+  local file="$1"
+  [[ -f $file ]] || die "file not found: $file"
+  FLEET_WORK="$(mktemp -d)"
+  trap 'rm -rf "$FLEET_WORK"' EXIT
+  chown "$SERVICE_USER" "$FLEET_WORK"
+  install -o "$SERVICE_USER" -m 0600 "$file" "$FLEET_WORK/backup.fleet"
+  app_cli decrypt-backup "$FLEET_WORK/backup.fleet" "$FLEET_WORK/control-plane.tar.gz" </dev/tty \
+    || die "could not decrypt the backup"
+  restore_control_plane "$FLEET_WORK/control-plane.tar.gz"
+  echo "Bots whose files are not on this server are marked for Repair in the panel."
+}
+
 cmd_restore() {
   local target="${1:-}"
-  [[ -n $target ]] || die "usage: fleetpanel restore <control-plane .tar.gz | instance backup id>  (see: fleetpanel backups)"
-  if [[ $target == *.tar.gz ]]; then
+  [[ -n $target ]] || die "usage: fleetpanel restore <backup.fleet | control-plane .tar.gz | instance backup id>  (see: fleetpanel backups)"
+  if [[ $target == *.fleet ]]; then
+    restore_fleet "$target"
+  elif [[ $target == *.tar.gz ]]; then
     restore_control_plane "$target"
   else
     echo "Restoring instance backup $target. The bot is briefly offline; a safety backup is taken first."

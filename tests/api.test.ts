@@ -13,6 +13,9 @@ import { hashPassword } from '../src/security/passwords.js';
 import { SessionStore } from '../src/http/sessions.js';
 import { createApp } from '../src/http/app.js';
 import { BackupService } from '../src/services/backups.js';
+import { ControlBackupService } from '../src/services/controlBackup.js';
+import { SettingsStore } from '../src/settings.js';
+import { openBackup } from '../src/security/fleetBackup.js';
 import { InstanceService } from '../src/services/instances.js';
 import type { PrivilegedOps } from '../src/system/helper.js';
 import type { TelegramClient } from '../src/services/telegram.js';
@@ -45,7 +48,17 @@ const telegram: TelegramClient = {
   deleteWebhook: async (token) => {
     clearedWebhooks.push(token);
   },
+  sendMessage: async (_target, text) => {
+    sentMessages.push(text);
+  },
+  sendDocument: async (_target, file) => {
+    sentDocuments.push(file);
+  },
 };
+const sentMessages: string[] = [];
+const sentDocuments: Array<{ name: string; data: Buffer }> = [];
+let backups: BackupService;
+let controlBackup: ControlBackupService;
 
 const TOKEN = `123456789:${'A'.repeat(35)}`;
 let server: http.Server;
@@ -56,6 +69,26 @@ interface Reply {
   status: number;
   headers: http.IncomingHttpHeaders;
   body: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+}
+
+function rawRequest(method: string, url: string, headers: Record<string, string>, body: string): Promise<Reply> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${base}${url}`, { method, headers: { ...headers, 'content-length': String(Buffer.byteLength(body)) } }, (res) => {
+      let data = '';
+      res.on('data', (c) => (data += c));
+      res.on('end', () => {
+        let parsed: unknown = data;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          // not JSON
+        }
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, body: parsed });
+      });
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
 }
 
 function request(method: string, url: string, opts: { headers?: Record<string, string>; body?: unknown } = {}): Promise<Reply> {
@@ -120,7 +153,18 @@ beforeAll(async () => {
 
   const audit = new AuditLog(db);
   const secrets = new SecretStore(db, SecretBox.fromKey(crypto.randomBytes(32)));
-  const backups = new BackupService({ db, audit, secrets, ops, instancesDir, backupsDir, retention: 3 });
+  backups = new BackupService({ db, audit, secrets, ops, instancesDir, backupsDir, retention: 3 });
+  const masterKeyFile = path.join(tmp, 'master.key');
+  fs.writeFileSync(masterKeyFile, crypto.randomBytes(32), { mode: 0o600 });
+  controlBackup = new ControlBackupService({
+    db,
+    settings: new SettingsStore(db, SecretBox.fromKey(crypto.randomBytes(32))),
+    telegram,
+    audit,
+    masterKeyFile,
+    version: 'test',
+    host: 'test-host',
+  });
   const instances = new InstanceService({
     db,
     audit,
@@ -132,7 +176,7 @@ beforeAll(async () => {
     git: fakeClone,
     tools,
   });
-  const app = createApp({ db, sessions: new SessionStore(db), audit, instances, backups, cookieSecure: false, trustProxy: false, dataRoot: tmp });
+  const app = createApp({ db, sessions: new SessionStore(db), audit, instances, backups, controlBackup, cookieSecure: false, trustProxy: false, dataRoot: tmp });
   server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -425,6 +469,96 @@ describe('API security', () => {
     expect(clearedWebhooks).toContain(TOKEN);
     expect(webhooks.some((u) => u.includes('pasar.example.com'))).toBe(false);
     expect(createdSites.some((s) => s.slug === 'pasar-bot')).toBe(false);
+  });
+
+  it('imports a bot database backup safely and reapplies FleetPanel settings', async () => {
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    const list = (await request('GET', '/api/instances', { headers: { cookie } })).body.instances as Array<{ id: number; slug: string }>;
+    const mirza = list.find((i) => i.slug === 'demo-bot');
+    expect(mirza).toBeTruthy();
+    // Safety backups need mysqldump; stand in for it here.
+    const realCreate = backups.create.bind(backups);
+    backups.create = async () => ({ id: '20261003T000000Z-safe0001' }) as Awaited<ReturnType<BackupService['create']>>;
+    const upload = (body: string, type = 'application/octet-stream') =>
+      rawRequest('POST', `/api/instances/${mirza?.id}/import-db`, { cookie, 'x-csrf-token': csrf, 'content-type': type }, body);
+    try {
+      expect((await upload('x', 'text/plain')).status).toBe(415);
+
+      const unsafe = await upload('CREATE TABLE t (id int);\n\\! touch /tmp/pwned\n');
+      expect(unsafe.status).toBe(400);
+      expect(unsafe.body.error).toBe('unsafe_dump');
+      expect(tools.calls.imports).toHaveLength(0);
+
+      const dump = [
+        '-- MariaDB dump',
+        'CREATE DATABASE /*!32312 IF NOT EXISTS*/ `mirza_old` /*!40100 DEFAULT CHARACTER SET utf8mb4 */;',
+        'USE `mirza_old`;',
+        'CREATE TABLE `user` (`id` bigint);',
+        'INSERT INTO `user` VALUES (1),(2);',
+        '/*!50003 CREATE*/ /*!50017 DEFINER=`mirza`@`localhost`*/ /*!50003 TRIGGER t1 BEFORE INSERT ON `user` FOR EACH ROW SET @x = 1 */;;',
+      ].join('\n');
+      const sqlBefore = tools.calls.sql.length;
+      const ok = await upload(dump);
+      expect(ok.status).toBe(200);
+      expect(ok.body.safety_backup_id).toBe('20261003T000000Z-safe0001');
+      const imported = tools.calls.imports.at(-1) ?? '';
+      expect(imported).toContain('INSERT INTO `user` VALUES (1),(2);');
+      expect(imported).not.toMatch(/CREATE DATABASE|USE `mirza_old`|DEFINER/);
+      // MirzaBot keeps the webhook secret in its database: FleetPanel's is written back.
+      expect(tools.calls.sql.slice(sqlBefore).some((q) => q.startsWith('UPDATE setting SET webhook_secret'))).toBe(true);
+
+      const notSql = await upload('hello world');
+      expect(notSql.status).toBe(400);
+      expect(notSql.body.error).toBe('not_a_dump');
+    } finally {
+      backups.create = realCreate;
+    }
+  });
+
+  it('keeps backup settings Owner-only and sends encrypted backups to Telegram', async () => {
+    const viewer = await login('viewer', 'Viewer-Password-1');
+    expect((await request('GET', '/api/settings/backup', { headers: { cookie: viewer.cookie } })).status).toBe(403);
+
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    const put = (body: unknown) => request('PUT', '/api/settings/backup', { headers: { cookie, 'x-csrf-token': csrf }, body });
+    const base = { enabled: true, chat_id: '-1001234567890', schedule: 'daily', bot_token: TOKEN };
+    expect((await put(base)).body.error).toBe('passphrase_required');
+    expect((await put({ ...base, passphrase: 'short' })).body.error).toBe('weak_passphrase');
+    expect((await put({ ...base, chat_id: '1; DROP' })).status).toBe(400);
+
+    const saved = await put({ ...base, passphrase: 'correct horse battery staple' });
+    expect(saved.status).toBe(200);
+    expect(saved.body.backup).toMatchObject({ enabled: true, has_token: true, has_passphrase: true, schedule: 'daily' });
+    expect(JSON.stringify(saved.body)).not.toContain(TOKEN);
+
+    expect((await request('POST', '/api/settings/backup/test', { headers: { cookie, 'x-csrf-token': csrf } })).status).toBe(200);
+    expect(sentMessages.at(-1)).toContain('test-host');
+
+    // The real archive needs tar and the SQLite backup API; a stand-in keeps this platform-independent.
+    const realCreate = controlBackup.create.bind(controlBackup);
+    if (process.platform === 'win32') {
+      controlBackup.create = async () => ({ name: 'fleetpanel-test-host-x.fleet', data: Buffer.from('stub'), instances: 0 });
+    }
+    try {
+      const run = await request('POST', '/api/settings/backup/run', { headers: { cookie, 'x-csrf-token': csrf } });
+      expect(run.status).toBe(200);
+      const doc = sentDocuments.at(-1);
+      expect(doc?.name).toMatch(/^fleetpanel-test-host-.*\.fleet$/);
+      if (process.platform !== 'win32' && doc) {
+        expect(() => openBackup(doc.data, 'wrong passphrase!!')).toThrow(/Wrong recovery passphrase/);
+        const { plain } = openBackup(doc.data, 'correct horse battery staple');
+        expect(plain.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
+      }
+      const view = (await request('GET', '/api/settings/backup', { headers: { cookie } })).body.backup;
+      expect(view.last_error).toBeNull();
+      expect(view.last_file).toBe(doc?.name);
+
+      // Scheduler: nothing to do right after a send; once the interval passes an unchanged panel is skipped.
+      expect(await controlBackup.tick()).toBe('idle');
+      expect(await controlBackup.tick(Date.now() + 25 * 3_600_000)).toBe('sent');
+    } finally {
+      controlBackup.create = realCreate;
+    }
   });
 
   it('reports real host stats and providers', async () => {

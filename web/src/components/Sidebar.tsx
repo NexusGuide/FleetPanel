@@ -9,13 +9,14 @@ import {
   LogOut,
   Plus,
   Server,
+  Settings,
   UserCog,
   Users,
 } from 'lucide-react';
 import type { Me, Permission } from '../api';
 import { cx } from './ui';
 
-export type Page = 'dashboard' | 'instances' | 'backups' | 'admins' | 'audit' | 'account';
+export type Page = 'dashboard' | 'instances' | 'backups' | 'admins' | 'audit' | 'settings' | 'account';
 
 export interface NavItem {
   id: Page;
@@ -32,6 +33,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'backups', label: 'Backups', icon: Archive, permission: 'backups.read', section: 'main' },
   { id: 'admins', label: 'Administrators', icon: Users, permission: 'admins.manage', section: 'manage' },
   { id: 'audit', label: 'Audit log', icon: ClipboardList, permission: 'audit.read', section: 'manage' },
+  { id: 'settings', label: 'Settings', icon: Settings, permission: 'settings.manage', section: 'manage' },
   { id: 'account', label: 'My account', icon: UserCog, section: 'manage' },
 ];
 

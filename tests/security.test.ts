@@ -15,6 +15,7 @@ import { PROVIDERS, PROVIDER_IDS } from '../src/providers/index.js';
 import type { Request } from 'express';
 import { openDb } from '../src/db.js';
 import { AuditLog } from '../src/audit.js';
+import { backupInfo, createRecipient, openBackup, sealBackup } from '../src/security/fleetBackup.js';
 
 const TOKEN = `123456789:${'A'.repeat(35)}`;
 const valid = { slug: 'demo-bot', provider: 'mirza', domain: 'bot.example.com', bot_token: TOKEN, admin_telegram_id: '42' };
@@ -110,6 +111,9 @@ describe('RBAC', () => {
     expect(can('Support', 'instances.delete')).toBe(false);
     expect(can('Admin', 'admins.manage')).toBe(false);
     expect(can('Owner', 'admins.manage')).toBe(true);
+    // Backup destination and recovery key decide where copies of the master key go: Owner only.
+    expect(can('Admin', 'settings.manage')).toBe(false);
+    expect(can('Owner', 'settings.manage')).toBe(true);
     expect(permissionsFor('Viewer')).toEqual(['instances.read', 'backups.read']);
   });
 });
@@ -189,6 +193,32 @@ describe('service bots', () => {
       '--exclude=demo/frontend/node_modules',
       '--exclude=demo/data/redis/redis.sock',
     ]);
+  });
+});
+
+describe('encrypted backups (.fleet)', () => {
+  const recipient = createRecipient('correct horse battery staple');
+  const meta = { created_at: '2026-10-03T00:00:00.000Z', host: 'vps-1', version: '0.4.0' };
+  const plain = Buffer.from('control-plane archive bytes');
+
+  it('round-trips with the passphrase and nothing else', () => {
+    const file = sealBackup(plain, recipient, meta);
+    expect(file.includes(plain)).toBe(false);
+    expect(backupInfo(file)).toEqual(meta);
+    expect(openBackup(file, 'correct horse battery staple').plain.equals(plain)).toBe(true);
+  });
+
+  it('refuses a wrong passphrase, tampering and weak passphrases', () => {
+    const file = sealBackup(plain, recipient, meta);
+    expect(() => openBackup(file, 'correct horse battery stapler')).toThrow(/Wrong recovery passphrase/);
+    const tampered = Buffer.from(file);
+    tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 1;
+    expect(() => openBackup(tampered, 'correct horse battery staple')).toThrow(/damaged or was modified/);
+    // The header (host, version, keys) is authenticated too.
+    const relabeled = Buffer.from(file.toString('latin1').replace('vps-1', 'vps-2'), 'latin1');
+    expect(() => openBackup(relabeled, 'correct horse battery staple')).toThrow();
+    expect(() => createRecipient('short')).toThrow();
+    expect(() => openBackup(Buffer.from('not a backup'), 'x')).toThrow(/Not a FleetPanel backup/);
   });
 });
 
