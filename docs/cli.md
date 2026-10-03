@@ -14,6 +14,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | `fleetpanel doctor` | Runs the checks below and prints `[PASS]`, `[WARN]` or `[FAIL]` for each. Exits non-zero if anything failed. |
 | `fleetpanel start` / `stop` / `restart` | Controls `fleetpanel.service`. Bots keep running when the panel is stopped. |
 | `fleetpanel logs [N] [-f]` | The last N lines (default 100) of the panel's journal; `-f` follows. Secrets are masked before they are logged. |
+| `fleetpanel logs SLUG [N] [-f]` | The journal of a Python bot's service (`fleetpanel-bot-SLUG`). |
 
 ### Doctor checks
 
@@ -34,7 +35,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | Composer | not installed |
 | Certificate renewal | *warn* when no certbot timer or cron job exists |
 | Firewall | *warn* when no firewall is active (optional), or ufw is active but ports 80/443 are not allowed |
-| Instances | *warn* for every instance in the error state |
+| Instances | *warn* for every instance in the error state; *fail* when a running Python bot's service is not active |
 
 ## Instances and backups
 
@@ -64,7 +65,8 @@ per-instance "busy" lock.
 | --- | --- |
 | `fleetpanel version` | Installed version, commit and update channel. |
 | `fleetpanel channel` | Shows the update channel and the latest released tags. |
-| `fleetpanel channel REF` | Sets the channel to a branch (`main`) or a release tag (`v0.3.0`). Takes effect on the next update. |
+| Menu item 9 | Pick the channel from a list (`main`, `dev`, or one of the latest released versions; test builds are marked) and update right away. |
+| `fleetpanel channel REF` | Sets the channel: `main` (stable), `dev` (test builds, new features first) or a release tag (`v0.3.0`). Takes effect on the next update. Moving from `dev` back to `main` can look like a downgrade (`0.4.0-beta.1` is older than `0.4.0`); `update` asks before installing an older version. |
 | `fleetpanel update` | Updates to the latest commit of the channel (see below). |
 
 ### Update

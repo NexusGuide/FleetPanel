@@ -34,7 +34,7 @@ administrator created with `node dist/cli.js create-admin`) and the UI with `npm
 src/            control plane (Express, SQLite) — see docs/architecture.md
   http/         routes, middleware, sessions
   services/     instances (provisioning), backups, telegram
-  providers/    MirzaBot / Faoxima install recipes
+  providers/    MirzaBot / Faoxima / PasarguardBot install recipes
   security/     validation, crypto, passwords, RBAC, PHP escaping
   system/       exec, root-helper client, composer/php/mysql toolchain
 web/            React panel (Vite + Tailwind)

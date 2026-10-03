@@ -4,9 +4,10 @@
 
 ### A secure control plane for hosting many Telegram bots on one Linux server
 
-Deploy and run isolated **MirzaBot** and **Faoxima** instances on a single Ubuntu/Debian VPS: each bot gets
-its own Linux user, PHP-FPM pool, MySQL database, nginx site and Let's Encrypt certificate, managed from a
-web panel and a CLI.
+Deploy and run isolated **MirzaBot**, **Faoxima** and **PasarguardBot** instances on a single Ubuntu/Debian
+VPS: each bot gets its own Linux user, MySQL database, nginx site and Let's Encrypt certificate (plus a
+PHP-FPM pool, or a sandboxed systemd service with its own Redis for Python bots), managed from a web panel
+and a CLI.
 
 [![CI](https://github.com/NexusGuide/FleetPanel/actions/workflows/ci.yml/badge.svg)](https://github.com/NexusGuide/FleetPanel/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
@@ -17,8 +18,8 @@ web panel and a CLI.
 
 </div>
 
-> **Status: v0.3 (pre-release).** Web panel, provisioning, CLI and updates are tested on a real
-> Ubuntu 24.04 server with MirzaBot and Faoxima. See the [changelog](CHANGELOG.md) and the [roadmap](#roadmap).
+> **Status: v0.4 (pre-release).** Web panel, provisioning, CLI and updates are tested on a real
+> Ubuntu 24.04 server with MirzaBot and Faoxima. PasarguardBot support is new in v0.4.0. See the [changelog](CHANGELOG.md) and the [roadmap](#roadmap).
 
 ---
 
@@ -58,10 +59,17 @@ Every number and state in the panel comes from the server; nothing is simulated.
 - **Backups:** list, restore (a safety backup is taken first), delete
 - **Administrators** (Owner only), **audit log** and **my account** (password, sessions)
 
-Creating a bot: point its domain's DNS at the server, then *New instance* → choose MirzaBot or Faoxima →
-domain, bot token from @BotFather and your numeric Telegram id. FleetPanel then downloads the bot, writes its
-config, runs `composer install` and the bot's own schema script, creates the database, the PHP pool and
-nginx site, issues the certificate and registers the webhook.
+Creating a bot: point its domain's DNS at the server, then *New instance* → choose MirzaBot, Faoxima or
+PasarguardBot → domain, bot token from @BotFather and your numeric Telegram id (PasarguardBot also needs an
+API id and hash from [my.telegram.org](https://my.telegram.org)). FleetPanel then downloads the bot's pinned
+version, writes its config, installs its dependencies and runs its schema setup as the bot's own user,
+creates the database and the nginx site, issues the certificate and connects the bot to Telegram.
+
+| Bot | Runs as | Notes |
+| :--- | :--- | :--- |
+| MirzaBot | PHP-FPM pool + Telegram webhook | Panels: Marzban, X-UI, S-UI, Hiddify, ... |
+| Faoxima | PHP-FPM pool + Telegram webhook | Panels: Marzban, X-UI |
+| PasarguardBot | Python service (systemd) + its own Redis | Panel: PasarGuard · ~300 MB RAM per bot |
 
 ---
 
@@ -87,7 +95,7 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 
 ```text
 ╭──────────────────────────────────────────╮
-│ FleetPanel v0.3.3  ·  channel main       │
+│ FleetPanel v0.4.0  ·  channel main       │
 ╰──────────────────────────────────────────╯
   Panel: ● running
 
@@ -106,6 +114,7 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 | `fleetpanel doctor` | Checks the whole host and reports `[PASS]` / `[WARN]` / `[FAIL]` |
 | `fleetpanel start` / `stop` / `restart` | Control the panel service (bots keep running) |
 | `fleetpanel logs [N] [-f]` | Last N log lines (secrets are masked); `-f` follows |
+| `fleetpanel logs SLUG [N] [-f]` | Log of a Python bot (PasarguardBot) |
 | `fleetpanel instances` | List bot instances with provider, domain, bot and status |
 | `fleetpanel backups [SLUG]` | List instance backups and control-plane backups |
 | `fleetpanel backup` | Back up the control plane: panel database **and master key** |
@@ -123,10 +132,10 @@ Full reference: [docs/cli.md](docs/cli.md).
 ### 🩺 System doctor
 
 ```text
-FleetPanel doctor — v0.3.3, channel main
+FleetPanel doctor — v0.4.0, channel main
 
   [PASS] Panel service is running
-  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.3.3"})
+  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.4.0"})
   [PASS] nginx configuration is valid
   [PASS] php-fpm 8.3 configuration is valid
   [PASS] MySQL/MariaDB is reachable
@@ -165,6 +174,19 @@ Summary: 15 passed, 1 warnings, 0 failed
 
 Bots are never stopped by a panel update.
 
+## 🧪 Release channels
+
+| Channel | What you get | Switch |
+| :--- | :--- | :--- |
+| `main` | Stable releases (default) | `sudo fleetpanel channel main && sudo fleetpanel update` |
+| `dev` | Test builds: new features first, may have bugs | `sudo fleetpanel channel dev && sudo fleetpanel update` |
+| `vX.Y.Z` | One fixed release, never moves | `sudo fleetpanel channel v0.3.3 && sudo fleetpanel update` |
+
+New features land on `dev` first and move to `main` once testers have found and fixed their bugs.
+Found one? Please open an [issue](https://github.com/NexusGuide/FleetPanel/issues) with the panel's error
+and `sudo fleetpanel doctor` output. To install a test build directly:
+`curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/dev/install.sh | sudo FLEETPANEL_REF=dev bash`
+
 ## 🗑️ Uninstall
 
 `sudo fleetpanel uninstall` offers two modes:
@@ -195,7 +217,6 @@ CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](
 - Cron jobs for the bots' scheduled tasks (expiry reminders, built-in bot backups)
 - Restoring a backup into a deleted instance
 - Per-instance version pinning and upgrades
-- PasarGuard provider
 - Scheduled backups and off-site upload
 
 ## 📖 Documentation
@@ -210,5 +231,6 @@ CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](
 
 ## 📄 License
 
-FleetPanel is open-source software licensed under the [MIT License](LICENSE). MirzaBot and Faoxima are
-separate projects with their own licenses; FleetPanel downloads them from their repositories at install time.
+FleetPanel is open-source software licensed under the [MIT License](LICENSE). MirzaBot, Faoxima and
+PasarguardBot are separate projects with their own licenses (PasarguardBot: AGPL-3.0); FleetPanel downloads
+them unmodified from their repositories at install time.

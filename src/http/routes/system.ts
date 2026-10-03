@@ -62,6 +62,9 @@ export function systemRoutes(d: AppDeps): Router {
         repo_url: PROVIDERS[id].repoUrl,
         version: PROVIDERS[id].version,
         commit: PROVIDERS[id].commit,
+        runtime: PROVIDERS[id].runtime,
+        extra_fields: PROVIDERS[id].extraFields,
+        web_path: PROVIDERS[id].webPath,
       })),
     });
   });

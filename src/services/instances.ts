@@ -7,10 +7,18 @@ import type { PrivilegedOps } from '../system/helper.js';
 import type { Toolchain } from '../system/toolchain.js';
 import type { TelegramClient } from './telegram.js';
 import type { BackupRow, BackupService } from './backups.js';
-import { PROVIDERS, type ProviderId } from '../providers/index.js';
+import {
+  APP_PORT_BASE,
+  PROVIDERS,
+  type PhpProvider,
+  type ProviderContext,
+  type ProviderId,
+  type PythonProvider,
+} from '../providers/index.js';
 import { SLUG_RE, type CreateInstanceInput } from '../security/validation.js';
 import { generatePassword, randomToken } from '../security/crypto.js';
 import { HttpError, errorMessage } from '../errors.js';
+import { maskSecrets } from '../security/mask.js';
 import { log } from '../log.js';
 
 export type InstanceStatus = 'provisioning' | 'running' | 'stopped' | 'error' | 'deleting';
@@ -26,6 +34,8 @@ export interface InstanceRow {
   admin_telegram_id: string;
   /** Upstream commit the instance's code was installed from (null before the first download). */
   source_commit: string | null;
+  /** Loopback port of a service bot's web server (null for PHP bots). */
+  app_port: number | null;
   status: InstanceStatus;
   last_error: string | null;
   created_at: string;
@@ -60,6 +70,24 @@ export interface InstanceServiceDeps {
   git: GitCheckout;
   tools: Toolchain;
   instancesDir: string;
+}
+
+/** Directories a service bot writes to; created by the control plane before ownership is handed over. */
+const SERVICE_DIRS = ['workdir', 'logs', 'sessions', 'data/redis'];
+
+/**
+ * Some bots (python-decouple with RepositoryEnv(".env")) refuse to start without a .env file in their
+ * working directory, although real environment variables win over it. These stay empty: the secrets
+ * live in the root-only environment file, so the bot's own backups (which zip .env) carry none.
+ */
+const ENV_PLACEHOLDERS = ['.env', 'workdir/.env'];
+const ENV_PLACEHOLDER_TEXT = '# Managed by FleetPanel: settings come from the service environment, not this file.\n';
+
+/** KEY=value lines for the helper's instance-env command. */
+function envFile(env: Record<string, string>): string {
+  return Object.entries(env)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
 }
 
 /** Runs one provisioning step and prefixes failures with its name, so last_error says where it broke. */
@@ -153,6 +181,7 @@ export class InstanceService {
 
   /** Validates a creation request without changing anything (token checked with Telegram). */
   async check(input: CreateInstanceInput): Promise<{ bot_username: string; conflicts: InstanceConflicts }> {
+    // Assumes createInstanceSchema already required the provider's extra fields.
     const bot = await this.d.telegram.getMe(input.bot_token);
     return { bot_username: bot.username, conflicts: this.conflicts(input.slug, input.domain, bot.username) };
   }
@@ -187,6 +216,11 @@ export class InstanceService {
     this.d.secrets.put(id, 'bot_token', input.bot_token);
     this.d.secrets.put(id, 'db_password', generatePassword(32));
     this.d.secrets.put(id, 'webhook_secret', randomToken(32));
+    if (input.api_id) this.d.secrets.put(id, 'api_id', input.api_id);
+    if (input.api_hash) this.d.secrets.put(id, 'api_hash', input.api_hash);
+    if (PROVIDERS[input.provider].runtime === 'python') {
+      this.d.db.prepare('UPDATE instances SET app_port = ? WHERE id = ?').run(APP_PORT_BASE + id, id);
+    }
     this.d.audit.write({
       actor,
       action: 'INSTANCE_CREATE',
@@ -226,7 +260,7 @@ export class InstanceService {
       const dbPassword = this.d.secrets.get(id, 'db_password');
       const webhookSecret = this.d.secrets.get(id, 'webhook_secret');
 
-      const ctx = {
+      const ctx: ProviderContext = {
         domain: inst.domain,
         dbName: inst.db_name,
         dbUser: inst.db_user,
@@ -235,64 +269,25 @@ export class InstanceService {
         botUsername: inst.bot_username ?? '',
         adminTelegramId: inst.admin_telegram_id,
         webhookSecret,
-      };
-      const db = { dbName: inst.db_name, dbUser: inst.db_user, password: dbPassword };
-      const inside = (rel: string): string => {
-        const p = path.resolve(dir, rel);
-        if (!p.startsWith(dir + path.sep)) throw new Error(`provider path ${rel} escapes the instance directory`);
-        return p;
+        instanceDir: dir,
+        apiId: this.d.secrets.find(id, 'api_id'),
+        apiHash: this.d.secrets.find(id, 'api_hash'),
+        appPort: inst.app_port ?? undefined,
       };
 
       if (cleanFirst) await step('Removing the previous install', () => this.d.ops.removeInstance(inst.slug));
       await step(`Downloading ${provider.displayName} ${provider.version}`, () => this.d.git(provider.repoUrl, provider.commit, dir));
       this.d.db.prepare('UPDATE instances SET source_commit = ? WHERE id = ?').run(provider.commit, id);
 
-      await step('Writing config.php', async () => {
-        const configPath = inside(provider.configFile);
-        const template = await fs.readFile(configPath, 'utf8');
-        await fs.writeFile(configPath, provider.renderConfig(template, ctx), { mode: 0o640 });
-        await fs.chmod(configPath, 0o640);
-      });
-
-      // The upstream web installer could reconfigure the bot; it must never be reachable.
-      await fs.rm(inside(provider.installerDir), { recursive: true, force: true });
-
-      await step('Creating the MySQL database', () => this.d.ops.createDatabase(inst.db_name, inst.db_user, dbPassword));
-      // From here on the bot's own code runs (Composer, its schema script): give the files to the
-      // bot's Linux user first and run those steps as that user, never as the control plane.
-      await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));
-      if ((await exists(inside('composer.json'))) && !(await exists(inside('vendor/autoload.php')))) {
-        await step('Installing PHP dependencies (composer install)', async () => {
-          await this.d.ops.runComposer(inst.slug);
-          await this.d.ops.fixPermissions(inst.slug);
-        });
-        if (!(await exists(inside('vendor/autoload.php')))) {
-          throw new Error('Installing PHP dependencies (composer install): vendor/autoload.php is still missing');
-        }
-      }
-      await step(`Creating database tables (${provider.schemaScript})`, async () => {
-        await this.d.ops.runPhp(inst.slug, provider.schemaScript);
-        await this.d.ops.fixPermissions(inst.slug);
-      });
-      await step('Configuring the bot', async () => {
-        const post = provider.postSchemaSql?.(ctx);
-        if (post) await this.d.tools.sql(db, post);
-        const out = (await this.d.tools.sql(db, provider.readyCheckSql(ctx))).trim();
-        if (!(Number.parseInt(out, 10) > 0)) throw new Error('the database schema was not created as expected');
-      });
-
-      await step('Creating the PHP pool and nginx site', () =>
-        this.d.ops.createInstance(inst.slug, inst.domain, provider.webhookPath, provider.webhookAuth, webhookSecret),
-      );
-      await step('Issuing the TLS certificate', () => this.d.ops.issueCertificate(inst.domain));
-      // Last, so it overrides any webhook the schema script registered on its own.
-      await step('Registering the Telegram webhook', () => this.d.telegram.setWebhook(botToken, provider.webhookUrl(ctx), webhookSecret));
+      if (provider.runtime === 'python') await this.provisionService(inst, provider, ctx);
+      else await this.provisionPhp(inst, provider, ctx);
 
       this.setStatus(id, 'running');
       this.d.audit.write({ actor, action: 'INSTANCE_PROVISION', resource: 'instance', resourceId: id, status: 'SUCCESS' });
       log.info(`Instance ${inst.slug} is running`);
     } catch (err) {
-      const message = errorMessage(err).slice(0, 1000);
+      // Step errors can carry the bot's own log lines; never store a token or password from them.
+      const message = maskSecrets(errorMessage(err)).slice(0, 1000);
       this.setStatus(id, 'error', message);
       this.d.audit.write({
         actor,
@@ -304,6 +299,94 @@ export class InstanceService {
       });
       log.error(`Provisioning failed for ${inst.slug}`, err);
     }
+  }
+
+  private async provisionPhp(inst: InstanceRow, provider: PhpProvider, ctx: ProviderContext): Promise<void> {
+    const dir = ctx.instanceDir;
+    const db = { dbName: inst.db_name, dbUser: inst.db_user, password: ctx.dbPassword };
+    const inside = (rel: string): string => {
+      const p = path.resolve(dir, rel);
+      if (!p.startsWith(dir + path.sep)) throw new Error(`provider path ${rel} escapes the instance directory`);
+      return p;
+    };
+
+    await step('Writing config.php', async () => {
+      const configPath = inside(provider.configFile);
+      const template = await fs.readFile(configPath, 'utf8');
+      await fs.writeFile(configPath, provider.renderConfig(template, ctx), { mode: 0o640 });
+      await fs.chmod(configPath, 0o640);
+    });
+
+    // The upstream web installer could reconfigure the bot; it must never be reachable.
+    await fs.rm(inside(provider.installerDir), { recursive: true, force: true });
+
+    await step('Creating the MySQL database', () => this.d.ops.createDatabase(inst.db_name, inst.db_user, ctx.dbPassword));
+    // From here on the bot's own code runs (Composer, its schema script): give the files to the
+    // bot's Linux user first and run those steps as that user, never as the control plane.
+    await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));
+    if ((await exists(inside('composer.json'))) && !(await exists(inside('vendor/autoload.php')))) {
+      await step('Installing PHP dependencies (composer install)', async () => {
+        await this.d.ops.runComposer(inst.slug);
+        await this.d.ops.fixPermissions(inst.slug);
+      });
+      if (!(await exists(inside('vendor/autoload.php')))) {
+        throw new Error('Installing PHP dependencies (composer install): vendor/autoload.php is still missing');
+      }
+    }
+    await step(`Creating database tables (${provider.schemaScript})`, async () => {
+      await this.d.ops.runPhp(inst.slug, provider.schemaScript);
+      await this.d.ops.fixPermissions(inst.slug);
+    });
+    await step('Configuring the bot', async () => {
+      const post = provider.postSchemaSql?.(ctx);
+      if (post) await this.d.tools.sql(db, post);
+      const out = (await this.d.tools.sql(db, provider.readyCheckSql(ctx))).trim();
+      if (!(Number.parseInt(out, 10) > 0)) throw new Error('the database schema was not created as expected');
+    });
+
+    await step('Creating the PHP pool and nginx site', () =>
+      this.d.ops.createInstance(inst.slug, inst.domain, provider.webhookPath, provider.webhookAuth, ctx.webhookSecret),
+    );
+    await step('Issuing the TLS certificate', () => this.d.ops.issueCertificate(inst.domain));
+    // Last, so it overrides any webhook the schema script registered on its own.
+    await step('Registering the Telegram webhook', () =>
+      this.d.telegram.setWebhook(ctx.botToken, provider.webhookUrl(ctx), ctx.webhookSecret),
+    );
+  }
+
+  /** A long-running Python bot: its own systemd service and Redis, web server behind nginx. */
+  private async provisionService(inst: InstanceRow, provider: PythonProvider, ctx: ProviderContext): Promise<void> {
+    const dir = ctx.instanceDir;
+    const port = inst.app_port;
+    if (port === null) throw new Error('No application port was assigned to this instance');
+    const db = { dbName: inst.db_name, dbUser: inst.db_user, password: ctx.dbPassword };
+
+    await step('Creating the MySQL database', () => this.d.ops.createDatabase(inst.db_name, inst.db_user, ctx.dbPassword));
+    await step('Preparing the Python runtime (the first bot takes a few minutes)', () => this.d.ops.prepareRuntime());
+    await step('Writing the bot configuration', async () => {
+      await this.d.ops.writeEnv(inst.slug, envFile(provider.renderEnv(ctx)));
+      for (const rel of SERVICE_DIRS) await fs.mkdir(path.join(dir, rel), { recursive: true });
+      for (const rel of ENV_PLACEHOLDERS) await fs.writeFile(path.join(dir, rel), ENV_PLACEHOLDER_TEXT);
+      for (const rel of provider.workdirFiles) {
+        if (rel.includes('/') || rel.startsWith('.')) throw new Error(`invalid working-directory file ${rel}`);
+        await fs.copyFile(path.join(dir, rel), path.join(dir, 'workdir', rel));
+      }
+    });
+    // Everything below runs the bot's own code: as its Linux user, never as the control plane.
+    await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));
+    await step('Installing Python dependencies (uv sync)', () => this.d.ops.runTask(inst.slug, 'python-deps'));
+    await step('Building the web app', () => this.d.ops.runTask(inst.slug, 'webapp-build'));
+    await step('Creating database tables (alembic)', () => this.d.ops.runTask(inst.slug, 'python-migrate'));
+    await step('Checking the database', async () => {
+      const out = (await this.d.tools.sql(db, provider.readyCheckSql(ctx))).trim();
+      if (!(Number.parseInt(out, 10) > 0)) throw new Error('the database schema was not created as expected');
+    });
+    // The bot talks to Telegram over MTProto; a webhook left over from another bot would keep
+    // Bot API updates queued for nobody.
+    await step('Clearing an old Telegram webhook', () => this.d.telegram.deleteWebhook(ctx.botToken));
+    await step('Creating the bot service and nginx site', () => this.d.ops.createService(inst.slug, inst.domain, port));
+    await step('Issuing the TLS certificate', () => this.d.ops.issueCertificate(inst.domain));
+    await step('Starting the bot', () => this.d.ops.waitForService(inst.slug, port));
   }
 
   async start(id: number, actor: ActorRef): Promise<InstanceRow> {
