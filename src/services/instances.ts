@@ -367,6 +367,10 @@ export class InstanceService {
       await this.d.ops.writeEnv(inst.slug, envFile(provider.renderEnv(ctx)));
       for (const rel of SERVICE_DIRS) await fs.mkdir(path.join(dir, rel), { recursive: true });
       for (const rel of ENV_PLACEHOLDERS) await fs.writeFile(path.join(dir, rel), ENV_PLACEHOLDER_TEXT);
+      for (const rel of provider.workdirFiles) {
+        if (rel.includes('/') || rel.startsWith('.')) throw new Error(`invalid working-directory file ${rel}`);
+        await fs.copyFile(path.join(dir, rel), path.join(dir, 'workdir', rel));
+      }
     });
     // Everything below runs the bot's own code: as its Linux user, never as the control plane.
     await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));

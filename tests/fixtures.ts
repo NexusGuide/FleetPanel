@@ -44,7 +44,7 @@ export async function fakeClone(url: string, commit: string, dest: string): Prom
     // A Python project: no config template or installer, an Alembic schema and a web app.
     fs.mkdirSync(path.join(dest, 'frontend'), { recursive: true });
     fs.writeFileSync(path.join(dest, 'main.py'), '');
-    fs.writeFileSync(path.join(dest, 'pyproject.toml'), '');
+    fs.writeFileSync(path.join(dest, 'pyproject.toml'), '[project]\nversion = "2.1.4"\n');
     fs.writeFileSync(path.join(dest, 'uv.lock'), '');
     return;
   }

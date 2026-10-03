@@ -412,6 +412,8 @@ describe('API security', () => {
       expect(line).toMatch(/^(BOT_TOKEN|API_ID|API_HASH|ADMIN_ID|SQLALCHEMY_DATABASE_URL|FASTAPI_PORT|REDIS_URL|REDIS_NAMESPACE_PREFIX|LOG_DIR|TELETHON_SESSION_PATH|WEBAPP_URL)=[A-Za-z0-9_.:/@+%=?,-]{0,255}$/);
     }
     for (const sub of ['workdir', 'logs', 'sessions', 'data/redis']) expect(fs.existsSync(path.join(dir, sub))).toBe(true);
+    // Read relative to the working directory by the bot (app/version.py).
+    expect(fs.readFileSync(path.join(dir, 'workdir', 'pyproject.toml'), 'utf8')).toContain('version = "2.1.4"');
     // The bot needs a .env to exist; it must stay free of secrets (the bot zips it into its own backups).
     for (const rel of ['.env', 'workdir/.env']) {
       const text = fs.readFileSync(path.join(dir, rel), 'utf8');

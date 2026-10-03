@@ -80,6 +80,11 @@ export interface PhpProvider extends ProviderBase {
  */
 export interface PythonProvider extends ProviderBase {
   runtime: 'python';
+  /**
+   * Project files the bot reads relative to its working directory. The service runs in a separate
+   * working directory (downloads land there, not over the code), so these are copied into it.
+   */
+  workdirFiles: string[];
   /** The service's environment. Keys must be on the helper's allowlist, values in its charset. */
   renderEnv(ctx: ProviderContext): Record<string, string>;
   /** A query returning one number; provisioning fails unless it is > 0. */
@@ -222,6 +227,8 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     // Telethon logs in over MTProto, which needs an API id/hash besides the bot token.
     extraFields: ['api_id', 'api_hash'],
     webPath: 'webapp/',
+    // app/version.py reads Path("pyproject.toml") when the package metadata is missing.
+    workdirFiles: ['pyproject.toml'],
     runtime: 'python',
     renderEnv: (c) => ({
       BOT_TOKEN: c.botToken,
