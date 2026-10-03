@@ -13,6 +13,8 @@ import { clientKey } from '../src/http/rateLimit.js';
 import { gitCheckout } from '../src/system/git.js';
 import { PROVIDERS, PROVIDER_IDS } from '../src/providers/index.js';
 import type { Request } from 'express';
+import { openDb } from '../src/db.js';
+import { AuditLog } from '../src/audit.js';
 
 const TOKEN = `123456789:${'A'.repeat(35)}`;
 const valid = { slug: 'demo-bot', provider: 'mirza', domain: 'bot.example.com', bot_token: TOKEN, admin_telegram_id: '42' };
@@ -187,6 +189,15 @@ describe('service bots', () => {
       '--exclude=demo/frontend/node_modules',
       '--exclude=demo/data/redis/redis.sock',
     ]);
+  });
+});
+
+describe('audit log', () => {
+  it('masks secrets in metadata and still lists entries whose masked JSON is no longer valid', () => {
+    const audit = new AuditLog(openDb(':memory:'));
+    audit.write({ actor: 'cli', action: 'TEST', resource: 'x', status: 'SUCCESS', metadata: { api_hash: '0123456789abcdef0123456789abcdef' } });
+    const [entry] = audit.list(10);
+    expect(JSON.stringify(entry?.metadata)).not.toContain('0123456789abcdef');
   });
 });
 

@@ -6,17 +6,6 @@ import { InstanceActionButtons } from './InstancesPage';
 import { useInstanceActions } from './instanceActions';
 import { BackupTable } from './BackupsPage';
 
-const STEPS = [
-  'Download the bot code',
-  'Write config.php',
-  'Install PHP dependencies (composer)',
-  'Create the MySQL database and tables',
-  'Set file permissions',
-  'Create PHP pool + nginx site',
-  'Issue the TLS certificate',
-  'Register the Telegram webhook',
-];
-
 function Row({ label, children, copy }: { label: string; children: ReactNode; copy?: string }) {
   const toast = useToast();
   return (
@@ -108,16 +97,10 @@ export function InstanceDrawer({
               <InstanceActionButtons inst={inst} can={can} actions={actions} />
 
               {inst.status === 'provisioning' && (
-                <div className="p-3 rounded-md bg-blue-950/30 border border-blue-900/60 text-xs text-blue-200 space-y-2">
+                <div className="p-3 rounded-md bg-blue-950/30 border border-blue-900/60 text-xs text-blue-200">
                   <p className="flex items-center gap-2 font-medium">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Installing… this usually takes 1–3 minutes.
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Installing… usually 1–5 minutes.
                   </p>
-                  <ol className="list-decimal list-inside text-blue-200/70 space-y-0.5">
-                    {STEPS.map((s) => (
-                      <li key={s}>{s}</li>
-                    ))}
-                  </ol>
-                  <p className="text-blue-200/60">This page updates automatically when it finishes.</p>
                 </div>
               )}
 
@@ -126,8 +109,7 @@ export function InstanceDrawer({
                   <ErrorBanner error={inst.last_error ?? 'The last operation failed without a message.'} />
                   {can('instances.create') && (
                     <p className="text-[11px] text-slate-400">
-                      Fix the cause (usually DNS not pointing at this server, or port 80 blocked), then press{' '}
-                      <b>Reprovision</b>. Your database and secrets are kept.
+                      Fix the cause above, then press <b>Reprovision</b>. The database and settings are kept.
                     </p>
                   )}
                 </div>
@@ -185,9 +167,6 @@ export function InstanceDrawer({
                     <Time value={inst.updated_at} />
                   </Row>
                 </dl>
-                <p className="text-[11px] text-slate-500 mt-2">
-                  Bot token, database password and webhook secret are encrypted at rest and never sent to the browser.
-                </p>
               </section>
 
               {can('backups.read') && (
