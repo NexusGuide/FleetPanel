@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { Archive, Copy, ExternalLink, Loader2, X } from 'lucide-react';
-import { api, type Instance, type Permission } from '../api';
+import { api, instanceWebUrl, type Instance, type Permission } from '../api';
 import { ErrorBanner, Notice, Spinner, StatusBadge, Time, formatDate, useResource, useToast } from '../components/ui';
 import { InstanceActionButtons } from './InstancesPage';
 import { useInstanceActions } from './instanceActions';
@@ -79,6 +79,7 @@ export function InstanceDrawer({
 
   // The shared list can lag behind (e.g. right after creation), so also fetch this one directly.
   const fetched = useResource(() => api.instance(instanceId), [instanceId]);
+  const providers = useResource(api.providers, []);
   const inst = instance ?? fetched.data;
 
   return (
@@ -144,8 +145,16 @@ export function InstanceDrawer({
                     {inst.source_commit ? inst.source_commit.slice(0, 12) : '—'}
                   </Row>
                   <Row label="Domain" copy={inst.domain}>
-                    <a href={`https://${inst.domain}/`} target="_blank" rel="noreferrer noopener" className="hover:text-blue-300 inline-flex items-center gap-1">
-                      {inst.domain} <ExternalLink className="w-3 h-3" />
+                    {inst.domain}
+                  </Row>
+                  <Row label="Web panel" copy={instanceWebUrl(inst, providers.data)}>
+                    <a
+                      href={instanceWebUrl(inst, providers.data)}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="hover:text-blue-300 inline-flex items-center gap-1"
+                    >
+                      /{providers.data?.find((p) => p.id === inst.provider)?.web_path ?? ''} <ExternalLink className="w-3 h-3" />
                     </a>
                   </Row>
                   <Row label="Telegram bot">

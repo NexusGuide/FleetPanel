@@ -427,7 +427,9 @@ describe('API security', () => {
     expect(sys.body.instances.running).toBeGreaterThanOrEqual(1);
     const providers = await request('GET', '/api/system/providers', { headers: { cookie } });
     expect(providers.body.providers.map((p: { id: string }) => p.id)).toEqual(['mirza', 'faoxima', 'pasarguard']);
-    expect(providers.body.providers[2]).toMatchObject({ runtime: 'python', extra_fields: ['api_id', 'api_hash'] });
+    expect(providers.body.providers[2]).toMatchObject({ runtime: 'python', extra_fields: ['api_id', 'api_hash'], web_path: 'webapp/' });
+    // The panel links to the bots' own pages, never the webhook at the site root.
+    expect(providers.body.providers.map((p: { web_path: string }) => p.web_path)).toEqual(['panel/', 'panel/', 'webapp/']);
     for (const p of providers.body.providers as Array<{ commit: string; version: string }>) {
       expect(p.commit).toMatch(/^[0-9a-f]{40}$/);
       expect(p.version).toBeTruthy();

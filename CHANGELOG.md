@@ -23,6 +23,11 @@
 - Backups leave out virtualenvs, package caches and Redis sockets; restoring a Python bot rebuilds its
   virtualenv from `uv.lock`.
 
+### Fixed
+- The "open" buttons in the instance list and details opened the site root, which for MirzaBot and Faoxima
+  is the Telegram webhook (nginx answers 403 without the secret). They now open the bot's own web panel
+  (`/panel/`; PasarguardBot: `/webapp/`), shown as its own *Web panel* row in the details.
+
 ### Upgrading
 `sudo fleetpanel update`. Existing MirzaBot and Faoxima bots are not changed.
 

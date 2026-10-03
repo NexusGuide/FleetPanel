@@ -104,6 +104,14 @@ export interface Provider {
   /** php: served by PHP-FPM with a Telegram webhook; python: a long-running service. */
   runtime: 'php' | 'python';
   extra_fields: Array<'api_id' | 'api_hash'>;
+  /** The bot's own web page, relative to its domain (e.g. "panel/"). */
+  web_path: string;
+}
+
+/** Link to an instance's own web page (its admin panel or web app), never the webhook at the root. */
+export function instanceWebUrl(inst: Pick<Instance, 'domain' | 'provider'>, providers: Provider[] | null): string {
+  const webPath = providers?.find((p) => p.id === inst.provider)?.web_path ?? '';
+  return `https://${inst.domain}/${webPath}`;
 }
 
 export interface InstanceCheck {

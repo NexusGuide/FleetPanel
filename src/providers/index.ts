@@ -46,6 +46,11 @@ interface ProviderBase {
   /** Human-readable label for that commit, shown in the panel. */
   version: string;
   extraFields: ExtraField[];
+  /**
+   * The bot's own web page the panel links to. Not the site root: for the PHP bots that is the
+   * Telegram webhook, which nginx answers with 403 unless the request carries the secret.
+   */
+  webPath: string;
 }
 
 /** A PHP bot served by PHP-FPM; Telegram delivers updates to its webhook. */
@@ -146,6 +151,7 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     commit: '8e551ecf73d18dac8cb4b0cbada64c041e660f32',
     version: 'main @ 2026-10-02',
     extraFields: [],
+    webPath: 'panel/',
     runtime: 'php',
     webhookPath: 'index.php',
     // index.php compares ?secret= with setting.webhook_secret and re-registers the
@@ -178,6 +184,7 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     commit: '68eccf1981f1bd7f21c8000ad5fff198a0f6c175',
     version: 'v1.1.5',
     extraFields: [],
+    webPath: 'panel/',
     runtime: 'php',
     webhookPath: 'index.php',
     // FaoximaWebhookAuth checks the secret_token header against TELEGRAM_WEBHOOK_SECRET.
@@ -214,6 +221,7 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     version: 'v2.1.4',
     // Telethon logs in over MTProto, which needs an API id/hash besides the bot token.
     extraFields: ['api_id', 'api_hash'],
+    webPath: 'webapp/',
     runtime: 'python',
     renderEnv: (c) => ({
       BOT_TOKEN: c.botToken,
