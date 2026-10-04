@@ -97,9 +97,11 @@ export interface ToolCalls {
   /** Service-bot helper calls in order ("runtime", "slug:task", "slug:service:domain:port", ...). */
   service: string[];
   env: Record<string, string>;
+  /** Contents of each imported (sanitized) dump. */
+  imports: string[];
 }
 
-export const newToolCalls = (): ToolCalls => ({ composer: [], php: [], sql: [], service: [], env: {} });
+export const newToolCalls = (): ToolCalls => ({ composer: [], php: [], sql: [], service: [], env: {}, imports: [] });
 
 export function fakeToolchain(calls: ToolCalls = newToolCalls()): Toolchain & { calls: ToolCalls } {
   return {
@@ -107,6 +109,9 @@ export function fakeToolchain(calls: ToolCalls = newToolCalls()): Toolchain & { 
     async sql(_db, sql) {
       calls.sql.push(sql);
       return '1\n';
+    },
+    async importDump(_db, file) {
+      calls.imports.push(fs.readFileSync(file, 'utf8'));
     },
   };
 }

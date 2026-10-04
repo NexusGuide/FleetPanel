@@ -101,6 +101,23 @@ Service bots (PasarguardBot) additionally:
 - Control-plane backups (`src/cli.ts`, `bin/fleetpanel`): SQLite online-backup copy of the database plus
   the master key, mode 600, in `/opt/fleetpanel/backups`. They must be stored off the server.
 
+## Panel backups (.fleet)
+
+- Encrypted with AES-256-GCM under a key from X25519 (one-off key per file + the panel's backup public key)
+  and HKDF-SHA256; the header (host, version, keys) is authenticated.
+- The private key is stored only inside the files, encrypted with a scrypt key (N=2^16, r=8, p=1) from the
+  recovery passphrase, which is never stored. The server cannot decrypt backups it already sent.
+- Each file is decrypted once right after encryption to verify it; login sessions are removed from the copy.
+- Telegram bot token: encrypted with the master key in the panel database. Configuring backups needs the
+  Owner-only `settings.manage` permission.
+
+## Database import
+
+- Uploads only through the import path (512 MB limit there; 1 MB elsewhere), streamed to a private scratch
+  directory; `.zip` entries are read with `unzip -p` (no extraction to disk).
+- Refused: mysql client commands. Removed: `CREATE DATABASE`, `USE`, `DEFINER`. Imported as the bot's
+  own database user with `--binary-mode`, after a safety backup.
+
 ## Audit log
 
 `src/audit.ts` and the `audit_logs` table: insert-only (triggers abort `UPDATE` and `DELETE`). Entries

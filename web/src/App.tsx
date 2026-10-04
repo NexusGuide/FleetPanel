@@ -11,6 +11,7 @@ import { BackupsPage } from './pages/BackupsPage';
 import { AdminsPage } from './pages/AdminsPage';
 import { AuditPage } from './pages/AuditPage';
 import { AccountPage } from './pages/AccountPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { CreateInstanceWizard } from './pages/CreateInstanceWizard';
 import { InstanceDrawer } from './pages/InstanceDrawer';
 
@@ -268,6 +269,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => Promise<void> }) {
           {page === 'backups' && <BackupsPage can={can} instances={instances} onChanged={() => void reloadInstances()} />}
           {page === 'admins' && <AdminsPage me={me} />}
           {page === 'audit' && <AuditPage />}
+          {page === 'settings' && <SettingsPage />}
           {page === 'account' && <AccountPage me={me} onLoggedOut={onLogout} />}
         </main>
       </div>

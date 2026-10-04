@@ -88,6 +88,12 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE instances ADD COLUMN source_commit TEXT;`,
   // v0.4.0: loopback port of a service bot's web server.
   `ALTER TABLE instances ADD COLUMN app_port INTEGER;`,
+  // v0.4.1: panel-wide settings (Telegram backup target, schedule, backup public key).
+  `CREATE TABLE app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT ${NOW}
+  );`,
 ];
 
 export function openDb(file: string = path.join(config.dataDir, 'fleetpanel.db')): DB {

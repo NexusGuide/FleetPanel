@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { DB } from '../db.js';
@@ -10,6 +11,7 @@ import type { BackupRow, BackupService } from './backups.js';
 import {
   APP_PORT_BASE,
   PROVIDERS,
+  type BotProvider,
   type PhpProvider,
   type ProviderContext,
   type ProviderId,
@@ -19,6 +21,8 @@ import { SLUG_RE, type CreateInstanceInput } from '../security/validation.js';
 import { generatePassword, randomToken } from '../security/crypto.js';
 import { HttpError, errorMessage } from '../errors.js';
 import { maskSecrets } from '../security/mask.js';
+import { prepareDump, saveUpload } from './dbImport.js';
+import type { Readable } from 'node:stream';
 import { log } from '../log.js';
 
 export type InstanceStatus = 'provisioning' | 'running' | 'stopped' | 'error' | 'deleting';
@@ -165,6 +169,19 @@ export class InstanceService {
     if (result.changes > 0) log.warn(`Flagged ${result.changes} interrupted instance(s) as error`);
   }
 
+  /**
+   * Called at boot: an instance whose files are gone (e.g. the control plane was restored on a new
+   * server) is flagged instead of shown as running; Repair reinstalls it from its stored settings.
+   */
+  flagMissingInstalls(): void {
+    for (const inst of this.list()) {
+      if (inst.status !== 'running' && inst.status !== 'stopped') continue;
+      if (existsSync(instanceDir(this.d.instancesDir, inst.slug))) continue;
+      this.setStatus(inst.id, 'error', 'The bot is not installed on this server (restored from a backup?). Press Repair to reinstall it.');
+      log.warn(`Instance ${inst.slug} has no files on this server; flagged for Repair`);
+    }
+  }
+
   /** Why an instance with these values cannot be created, per field (empty when there is no conflict). */
   conflicts(slug: string, domain: string, botUsername?: string): InstanceConflicts {
     const find = (column: 'slug' | 'domain' | 'bot_username', value: string) =>
@@ -255,25 +272,8 @@ export class InstanceService {
     const inst = this.get(id);
     const provider = PROVIDERS[inst.provider];
     try {
-      const dir = instanceDir(this.d.instancesDir, inst.slug);
-      const botToken = this.d.secrets.get(id, 'bot_token');
-      const dbPassword = this.d.secrets.get(id, 'db_password');
-      const webhookSecret = this.d.secrets.get(id, 'webhook_secret');
-
-      const ctx: ProviderContext = {
-        domain: inst.domain,
-        dbName: inst.db_name,
-        dbUser: inst.db_user,
-        dbPassword,
-        botToken,
-        botUsername: inst.bot_username ?? '',
-        adminTelegramId: inst.admin_telegram_id,
-        webhookSecret,
-        instanceDir: dir,
-        apiId: this.d.secrets.find(id, 'api_id'),
-        apiHash: this.d.secrets.find(id, 'api_hash'),
-        appPort: inst.app_port ?? undefined,
-      };
+      const ctx = this.contextFor(inst);
+      const dir = ctx.instanceDir;
 
       if (cleanFirst) await step('Removing the previous install', () => this.d.ops.removeInstance(inst.slug));
       await step(`Downloading ${provider.displayName} ${provider.version}`, () => this.d.git(provider.repoUrl, provider.commit, dir));
@@ -299,6 +299,88 @@ export class InstanceService {
       });
       log.error(`Provisioning failed for ${inst.slug}`, err);
     }
+  }
+
+  /** Everything a provider needs to configure this instance (secrets decrypted). */
+  private contextFor(inst: InstanceRow): ProviderContext {
+    return {
+      domain: inst.domain,
+      dbName: inst.db_name,
+      dbUser: inst.db_user,
+      dbPassword: this.d.secrets.get(inst.id, 'db_password'),
+      botToken: this.d.secrets.get(inst.id, 'bot_token'),
+      botUsername: inst.bot_username ?? '',
+      adminTelegramId: inst.admin_telegram_id,
+      webhookSecret: this.d.secrets.get(inst.id, 'webhook_secret'),
+      instanceDir: instanceDir(this.d.instancesDir, inst.slug),
+      apiId: this.d.secrets.find(inst.id, 'api_id'),
+      apiHash: this.d.secrets.find(inst.id, 'api_hash'),
+      appPort: inst.app_port ?? undefined,
+    };
+  }
+
+  /**
+   * Replaces a bot's database with one of its own backups (a mysqldump as .sql, .sql.gz or a .zip
+   * holding one .sql). A safety backup is taken first; the bot is stopped during the import and its
+   * FleetPanel-managed settings (schema, webhook secret, webhook) are reapplied afterwards.
+   */
+  async importDatabase(id: number, upload: Readable, actor: ActorRef): Promise<{ safety_backup_id: string }> {
+    const inst = this.get(id);
+    if (inst.status !== 'running' && inst.status !== 'stopped') {
+      throw new HttpError(409, 'instance_not_ready', 'The bot must be installed (running or stopped) before importing a database. Press Repair first.');
+    }
+    this.lock(inst);
+    const work = await this.d.backups.workDir('import');
+    let safetyId: string | null = null;
+    try {
+      const uploadFile = path.join(work, 'upload');
+      await saveUpload(upload, uploadFile);
+      const dump = await prepareDump(uploadFile, work);
+      await fs.rm(uploadFile, { force: true });
+
+      safetyId = (await this.d.backups.create(inst, 'pre-restore', actor)).id;
+      const provider = PROVIDERS[inst.provider];
+      const ctx = this.contextFor(inst);
+      const db = { dbName: inst.db_name, dbUser: inst.db_user, password: ctx.dbPassword };
+      await this.d.ops.disableInstance(inst.slug);
+      try {
+        await step('Importing the database', () => this.d.tools.importDump(db, dump));
+        await this.reapplySettings(inst, provider, ctx);
+      } finally {
+        if (inst.status === 'running') await this.d.ops.enableInstance(inst.slug);
+      }
+      this.d.audit.write({ actor, action: 'INSTANCE_DB_IMPORT', resource: 'instance', resourceId: id, status: 'SUCCESS', metadata: { slug: inst.slug, safety_backup_id: safetyId } });
+      return { safety_backup_id: safetyId };
+    } catch (err) {
+      const message = maskSecrets(errorMessage(err)).slice(0, 1000);
+      this.d.audit.write({ actor, action: 'INSTANCE_DB_IMPORT', resource: 'instance', resourceId: id, status: 'FAILED', metadata: { slug: inst.slug, error: message, safety_backup_id: safetyId } });
+      if (err instanceof HttpError && safetyId === null) throw err;
+      throw new HttpError(
+        500,
+        'import_failed',
+        safetyId ? `${message}. The previous database is in safety backup ${safetyId} (Backups → Restore).` : message,
+      );
+    } finally {
+      await fs.rm(work, { recursive: true, force: true }).catch(() => undefined);
+      this.unlock(id);
+    }
+  }
+
+  /** After a database import: bring the schema up to date and put FleetPanel's settings back. */
+  private async reapplySettings(inst: InstanceRow, provider: BotProvider, ctx: ProviderContext): Promise<void> {
+    if (provider.runtime === 'python') {
+      await step('Updating database tables (alembic)', () => this.d.ops.runTask(inst.slug, 'python-migrate'));
+      return;
+    }
+    const db = { dbName: inst.db_name, dbUser: inst.db_user, password: ctx.dbPassword };
+    await step(`Updating database tables (${provider.schemaScript})`, async () => {
+      await this.d.ops.runPhp(inst.slug, provider.schemaScript);
+      await this.d.ops.fixPermissions(inst.slug);
+    });
+    // The imported data carries the old webhook secret (MirzaBot keeps it in its database).
+    const post = provider.postSchemaSql?.(ctx);
+    if (post) await step('Restoring the webhook secret', () => this.d.tools.sql(db, post));
+    await step('Registering the Telegram webhook', () => this.d.telegram.setWebhook(ctx.botToken, provider.webhookUrl(ctx), ctx.webhookSecret));
   }
 
   private async provisionPhp(inst: InstanceRow, provider: PhpProvider, ctx: ProviderContext): Promise<void> {

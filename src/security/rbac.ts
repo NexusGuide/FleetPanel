@@ -11,12 +11,14 @@ export const PERMISSIONS = [
   'backups.restore',
   'admins.manage',
   'audit.read',
+  // Backup destination and recovery key: they decide where copies of the master key go.
+  'settings.manage',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
 const MATRIX: Record<Role, ReadonlySet<Permission>> = {
   Owner: new Set<Permission>(PERMISSIONS),
-  Admin: new Set<Permission>(PERMISSIONS.filter((p) => p !== 'admins.manage')),
+  Admin: new Set<Permission>(PERMISSIONS.filter((p) => p !== 'admins.manage' && p !== 'settings.manage')),
   Manager: new Set<Permission>([
     'instances.read',
     'instances.create',

@@ -200,6 +200,19 @@ server {
     server_name $SERVER_NAME;
     client_max_body_size 1m;
 
+    # Bot database imports (Instances -> Import database): large uploads on this path only.
+    location ~ ^/api/instances/[0-9]+/import-db$ {
+        client_max_body_size 512m;
+        proxy_request_buffering off;
+        proxy_pass http://127.0.0.1:$BACKEND_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 1800s;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:$BACKEND_PORT;
         proxy_http_version 1.1;
