@@ -101,22 +101,22 @@ nginx را می‌سازد، گواهی SSL می‌گیرد و ربات را ب�
 
 ## 💻 خط فرمان FleetPanel و عیب‌یابی
 
-`fleetpanel` در `/usr/local/bin/fleetpanel` نصب می‌شود. بدون آرگومان اجرا کنید تا منوی تعاملی باز شود:
+`fleetpanel` در `/usr/local/bin/fleetpanel` نصب می‌شود. بدون آرگومان اجرا کنید تا منوی تعاملی باز شود
+(*Logs* لاگ پنل یا هر ربات پایتونی را نشان می‌دهد؛ *Backups* فهرست بکاپ‌ها، بکاپ پنل و بازگردانی؛ *Update* آپدیت
+همین الان یا تغییر کانال بین `main`، `dev` و یک نسخه‌ی مشخص):
 
 </div>
 
 ```text
 ╭──────────────────────────────────────────╮
-│ FleetPanel v0.4.0  ·  channel main       │
+│ FleetPanel v0.4.2  ·  channel main       │
 ╰──────────────────────────────────────────╯
   Panel: ● running
 
-  1) Status            7) Restore a backup
-  2) Doctor            8) Update
-  3) Logs              9) Version / update channel
-  4) Instances        10) Restart panel
-  5) Backups          11) Firewall
-  6) Back up panel    12) Uninstall
+  1) Status        5) Update
+  2) Doctor        6) Firewall
+  3) Logs          7) Restart panel
+  4) Backups       8) Uninstall
   0) Exit
 ```
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.2 (dev channel)
+
+### Changed
+- A shorter CLI menu: 8 items instead of 12. *Status* already lists the bots (no separate *Instances*);
+  *Logs* offers the panel's log or any Python bot's log; *Backups* lists, backs up the panel and restores;
+  *Update* updates now or first switches the channel. The direct commands (`fleetpanel instances`,
+  `channel`, `backup`, …) are unchanged.
+- *Restart panel* in the menu waits for the panel to be healthy and says so if it is not.
+
 ## v0.4.1 (dev channel)
 
 ### Added

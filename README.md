@@ -95,20 +95,20 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 
 ## 💻 FleetPanel CLI & diagnostics
 
-`fleetpanel` is installed at `/usr/local/bin/fleetpanel`. Run it without arguments for the interactive menu:
+`fleetpanel` is installed at `/usr/local/bin/fleetpanel`. Run it without arguments for the interactive menu
+(*Logs* also offers each Python bot's log; *Backups* lists, backs up the panel and restores; *Update* updates
+now or switches between `main`, `dev` and a specific version):
 
 ```text
 ╭──────────────────────────────────────────╮
-│ FleetPanel v0.4.0  ·  channel main       │
+│ FleetPanel v0.4.2  ·  channel main       │
 ╰──────────────────────────────────────────╯
   Panel: ● running
 
-  1) Status            7) Restore a backup
-  2) Doctor            8) Update
-  3) Logs              9) Version / update channel
-  4) Instances        10) Restart panel
-  5) Backups          11) Firewall
-  6) Back up panel    12) Uninstall
+  1) Status        5) Update
+  2) Doctor        6) Firewall
+  3) Logs          7) Restart panel
+  4) Backups       8) Uninstall
   0) Exit
 ```
 
