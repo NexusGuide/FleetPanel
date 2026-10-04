@@ -15,6 +15,9 @@ and a CLI.
 [![Security: Argon2id + AES-256-GCM](https://img.shields.io/badge/Security-Argon2id%20%2B%20AES--256--GCM-red?style=flat-square)](SECURITY.md)
 [![Node.js 20.19+](https://img.shields.io/badge/Node.js-20.19%2B-green?style=flat-square&logo=node.js)](https://nodejs.org)
 [![PHP 8.2+](https://img.shields.io/badge/PHP-8.2%2B-777bb4?style=flat-square&logo=php)](https://www.php.net)
+[![Telegram group](https://img.shields.io/badge/Telegram-group-26A5E4?style=flat-square&logo=telegram)](https://t.me/FleetPanelGroup)
+
+**English** · [فارسی](README.fa.md)
 
 </div>
 
@@ -185,8 +188,8 @@ Bots are never stopped by a panel update.
 | `vX.Y.Z` | One fixed release, never moves | `sudo fleetpanel channel v0.3.3 && sudo fleetpanel update` |
 
 New features land on `dev` first and move to `main` once testers have found and fixed their bugs.
-Found one? Please open an [issue](https://github.com/NexusGuide/FleetPanel/issues) with the panel's error
-and `sudo fleetpanel doctor` output. To install a test build directly:
+Found one? Please open an [issue](https://github.com/NexusGuide/FleetPanel/issues) or post in the
+[Telegram group](https://t.me/FleetPanelGroup), with the panel's error and `sudo fleetpanel doctor` output. To install a test build directly:
 `curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/dev/install.sh | sudo FLEETPANEL_REF=dev bash`
 
 ## 🗑️ Uninstall
@@ -211,7 +214,7 @@ bash -n install.sh bin/fleetpanel deploy/fleetpanel-helper
 ```
 
 Tests cover authentication, CSRF and origin checks, RBAC, injection attempts, encryption at rest, the
-provisioning steps of both providers (with the system calls stubbed), audit logging and backups.
+provisioning steps of every provider (with the system calls stubbed), audit logging and backups.
 CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
@@ -219,7 +222,7 @@ CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](
 - Cron jobs for the bots' scheduled tasks (expiry reminders, built-in bot backups)
 - Restoring a backup into a deleted instance
 - Per-instance version pinning and upgrades
-- Scheduled backups and off-site upload
+- Off-site copies of the bots' own data
 
 ## 📖 Documentation
 
@@ -231,6 +234,10 @@ CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](
 - [Bot providers](docs/providers.md)
 - [Backups and disaster recovery](docs/backup.md)
 - [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
+
+## 💬 Community
+
+Questions, ideas and test reports: [Telegram group](https://t.me/FleetPanelGroup).
 
 ## 📄 License
 
