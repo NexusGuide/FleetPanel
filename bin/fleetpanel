@@ -268,12 +268,21 @@ release_tags() {
     | sed 's/-/~/' | sort -V -r | sed 's/~/-/' | head -n "${1:-10}" || true
 }
 
-# Menu: pick the update channel from a list instead of typing it, then optionally update.
-channel_menu() {
+# Menu: update now, or first pick another channel (main / dev / one release) from a list.
+update_menu() {
   local current choice ref="" tags=() i
   current="$(current_ref)"
   echo
   echo "${C_B}Version${C_0} v$(app_version) · channel ${C_B}$current${C_0}"
+  echo "  1) Update now"
+  echo "  2) Change channel"
+  echo "  0) Back"
+  case "$(ask 'Choose: ')" in
+    1) (cmd_update) || true; return 0 ;;
+    2) ;;
+    *) return 0 ;;
+  esac
+  echo
   echo "  1) main   stable (recommended)"
   echo "  2) dev    test builds, may have bugs"
   echo "  3) a specific version"
@@ -730,6 +739,40 @@ cmd_firewall() {
 # ---------------------------------------------------------------------------
 # Interactive menu
 
+# The panel's log, or the log of a Python bot (they run as their own services).
+logs_menu() {
+  local bots=() i choice
+  mapfile -t bots < <(ls /etc/systemd/system/fleetpanel-bot-*.service 2>/dev/null | sed -E 's#.*/fleetpanel-bot-(.*)\.service$#\1#')
+  if (( ${#bots[@]} == 0 )); then
+    cmd_logs 50
+    return 0
+  fi
+  echo "  1) Panel"
+  for i in "${!bots[@]}"; do printf '  %d) %s\n' "$((i + 2))" "${bots[$i]}"; done
+  echo "  0) Back"
+  choice="$(ask 'Choose: ')"
+  if [[ $choice == 1 ]]; then
+    cmd_logs 50
+  elif [[ $choice =~ ^[0-9]+$ ]] && (( choice >= 2 && choice <= ${#bots[@]} + 1 )); then
+    cmd_logs "${bots[$((choice - 2))]}" 50
+  fi
+}
+
+backups_menu() {
+  echo "  1) List backups"
+  echo "  2) Back up the panel now"
+  echo "  3) Restore a backup"
+  echo "  0) Back"
+  case "$(ask 'Choose: ')" in
+    1) cmd_backups || true ;;
+    2) cmd_backup || true ;;
+    3)
+      cmd_backups || true
+      (cmd_restore "$(ask 'Backup file (.fleet / .tar.gz) or instance backup id: ')") || true
+      ;;
+  esac
+}
+
 menu() {
   [[ -t 0 || -r /dev/tty ]] || { usage; exit 0; }
   need_root
@@ -747,28 +790,22 @@ menu() {
     if [[ $state == active ]]; then echo "  Panel: ${C_OK}● running${C_0}"; else echo "  Panel: ${C_BAD}● ${state:-stopped}${C_0}"; fi
     cat <<EOF
 
-  1) Status            7) Restore a backup
-  2) Doctor            8) Update
-  3) Logs              9) Version / update channel
-  4) Instances        10) Restart panel
-  5) Backups          11) Firewall
-  6) Back up panel    12) Uninstall
+  1) Status        5) Update
+  2) Doctor        6) Firewall
+  3) Logs          7) Restart panel
+  4) Backups       8) Uninstall
   0) Exit
 EOF
     choice="$(ask $'\nChoose: ')"
     case "$choice" in
       1) cmd_status || true ;;
       2) cmd_doctor || true ;;
-      3) cmd_logs 50 ;;
-      4) app_cli list-instances || true ;;
-      5) cmd_backups || true ;;
-      6) cmd_backup || true ;;
-      7) cmd_backups || true; (cmd_restore "$(ask 'File (.tar.gz) or instance backup id: ')") || true ;;
-      8) (cmd_update) || true ;;
-      9) channel_menu || true ;;
-      10) systemctl restart "$SERVICE" && echo "Restarted." ;;
-      11) firewall_status; [[ "$(ask 'Set up or update the firewall now? [y/N] ')" =~ ^[Yy]$ ]] && { (firewall_enable "" 0) || true; } ;;
-      12) cmd_uninstall; exit 0 ;;
+      3) logs_menu || true ;;
+      4) backups_menu || true ;;
+      5) update_menu || true ;;
+      6) firewall_status; [[ "$(ask 'Set up or update the firewall now? [y/N] ')" =~ ^[Yy]$ ]] && { (firewall_enable "" 0) || true; } ;;
+      7) systemctl restart "$SERVICE" && healthy && echo "Restarted." || echo "${C_BAD}The panel did not come back; see: sudo fleetpanel logs${C_0}" ;;
+      8) cmd_uninstall; exit 0 ;;
       0|q|"") exit 0 ;;
       *) echo "Unknown choice." ;;
     esac
