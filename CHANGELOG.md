@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.4.0-beta.2 (dev channel)
+## v0.4.1 (dev channel)
 
 ### Added
 - **Encrypted Telegram backups of the panel** (*Settings → Telegram backup*, Owner only): the panel database

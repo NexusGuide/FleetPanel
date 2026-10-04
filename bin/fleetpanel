@@ -115,7 +115,7 @@ version_lt() {
   [[ $a != "$b" && "$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -n 1)" == "$a" ]]
 }
 
-# Panels installed before v0.4.0-beta.2 accept 1 MB request bodies everywhere. Add the large-upload
+# Panels installed before v0.4.1 accept 1 MB request bodies everywhere. Add the large-upload
 # location for bot database imports once, keeping the old file if nginx rejects the result.
 ensure_panel_uploads() {
   [[ -f $PANEL_SITE ]] || return 0
