@@ -26,6 +26,20 @@ readonly RE_SECRET='^[A-Za-z0-9_-]{32,256}$'
 readonly RE_DB_PASSWORD='^[A-Za-z0-9]{24,128}$'
 readonly RE_PHP_VERSION='^[0-9]\.[0-9]$'
 readonly RE_EMAIL='^[^[:space:]@]+@[^[:space:]@]+\.[A-Za-z]{2,}$'
+readonly RE_PORT='^2[0-9]{4}$'
+readonly RE_ENV_LINE='^[A-Z][A-Z0-9_]{1,40}=[A-Za-z0-9_.:/@+%=?,-]{0,255}$'
+
+# Service bots (Python): a systemd service per bot, its own Redis, nginx as reverse proxy.
+readonly RUNTIME_DIR="$FLEET_DIR/runtime"
+readonly ENV_DIR=/etc/fleetpanel/instances
+readonly PYRUN=/usr/local/lib/fleetpanel/pyrun.py
+readonly REDIS_SERVER=/usr/bin/redis-server
+# Pinned toolchain; the checksums are those published with each release.
+readonly UV_VERSION=0.11.31
+readonly BUN_VERSION=1.4.2
+readonly PYTHON_SERIES=3.14
+# Only these keys may appear in a bot's environment: nothing that changes how programs load.
+readonly ENV_KEYS=" BOT_TOKEN API_ID API_HASH ADMIN_ID SQLALCHEMY_DATABASE_URL FASTAPI_PORT REDIS_URL REDIS_NAMESPACE_PREFIX LOG_DIR TELETHON_SESSION_PATH WEBAPP_URL "
 
 die() { echo "fleetpanel-helper: $*" >&2; exit 1; }
 need_args() { [[ $1 -eq $2 ]] || die "expected $2 argument(s), got $1"; }
@@ -53,6 +67,20 @@ instance_dir() { printf '%s/%s' "$INSTANCES_DIR" "$1"; }
 pool_file() { printf '/etc/php/%s/fpm/pool.d/fleetpanel-%s.conf' "$2" "$1"; }
 vhost_file() { printf '%s/fleetpanel-%s.conf' "$NGINX_AVAILABLE" "$1"; }
 vhost_link() { printf '%s/fleetpanel-%s.conf' "$NGINX_ENABLED" "$1"; }
+env_file() { printf '%s/%s.env' "$ENV_DIR" "$1"; }
+bot_unit() { printf 'fleetpanel-bot-%s.service' "$1"; }
+redis_unit() { printf 'fleetpanel-redis-%s.service' "$1"; }
+unit_path() { printf '/etc/systemd/system/%s' "$1"; }
+# A service bot is one whose environment file exists; it is written by root only.
+is_service_instance() { [[ -f "$(env_file "$1")" ]]; }
+
+nginx_ok() {
+  local out
+  if ! out="$(nginx -t 2>&1)"; then
+    CONFIG_ERROR="nginx: $(printf '%s' "$out" | grep -E 'emerg|error|failed' | tail -n 3 | tr '\n' ' ')"
+    return 1
+  fi
+}
 
 # Validates php-fpm and nginx config. On failure CONFIG_ERROR holds the tail of the
 # tool's own output, so callers can report the real reason instead of a generic one.
@@ -130,15 +158,25 @@ cmd_instance_perms() {
   [[ "$(pwd -P)" == "$dir" ]] || die "instance directory moved during permission fix"
   chown -R -P "$user:$user" .
   chmod -R u=rwX,g=rX,o= .
-  setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:rX,d:u:$WEB_USER:rX" .
-  if [[ -f config.php && ! -L config.php ]]; then setfacl -m "u:$WEB_USER:---" config.php; fi
+  if is_service_instance "$slug"; then
+    # nginx only proxies to a service bot; it never reads its files (sessions, Redis data).
+    setfacl -R -P -b .
+    setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX" .
+  else
+    setfacl -R -P -m "u:$CONTROL_USER:rwX,d:u:$CONTROL_USER:rwX,u:$WEB_USER:rX,d:u:$WEB_USER:rX" .
+    if [[ -f config.php && ! -L config.php ]]; then setfacl -m "u:$WEB_USER:---" config.php; fi
+  fi
 }
 
-# instance-run SLUG composer | SLUG php SCRIPT.php
+require_runtime() {
+  [[ -x $RUNTIME_DIR/bin/uv && -x $RUNTIME_DIR/bin/bun && -f $PYRUN ]] || die "the Python runtime is not installed (runtime-python)"
+}
+
+# instance-run SLUG composer | SLUG php SCRIPT.php | SLUG python-deps | SLUG webapp-build | SLUG python-migrate
 # Runs a bot's own install steps as the bot's Linux user, never as the control plane:
-# a compromised upstream project or Composer package then only reaches that one bot.
+# a compromised upstream project or package then only reaches that one bot.
 cmd_instance_run() {
-  local slug="${1:-}" task="${2:-}" user dir home rc
+  local slug="${1:-}" task="${2:-}" user dir home rc envf="" limit=900
   check_slug "$slug"
   user="$(instance_user "$slug")"
   dir="$(instance_dir "$slug")"
@@ -146,6 +184,28 @@ cmd_instance_run() {
   id -u "$user" >/dev/null 2>&1 || die "instance user does not exist (run instance-perms first)"
   local cmd=()
   case "$task" in
+    python-deps)
+      need_args $# 2
+      require_runtime
+      # --frozen: exactly the versions (and hashes) in the project's uv.lock.
+      cmd=("$RUNTIME_DIR/bin/uv" sync --frozen --no-dev --python "$PYTHON_SERIES")
+      limit=1800
+      ;;
+    webapp-build)
+      need_args $# 2
+      require_runtime
+      [[ -d $dir/frontend && ! -L $dir/frontend ]] || die "frontend directory not found"
+      # bun skips dependency install scripts except for its built-in and the project's trusted lists.
+      cmd=(bash -c 'cd frontend && "$0" install --frozen-lockfile && "$0" run build' "$RUNTIME_DIR/bin/bun")
+      limit=1800
+      ;;
+    python-migrate)
+      need_args $# 2
+      is_service_instance "$slug" || die "the bot's environment is missing (instance-env)"
+      [[ -x $dir/.venv/bin/alembic ]] || die "alembic is not installed (python-deps)"
+      cmd=("$dir/.venv/bin/alembic" upgrade head)
+      envf="$(env_file "$slug")"
+      ;;
     composer)
       need_args $# 2
       # No scripts or plugins: dependency packages cannot run code at install time.
@@ -162,11 +222,25 @@ cmd_instance_run() {
   esac
   home="$(mktemp -d)"
   chown "$user:$user" "$home"
+  local base=(PATH="$RUNTIME_DIR/bin:$PATH" LANG=C.UTF-8 HOME="$home" COMPOSER_HOME="$home" COMPOSER_NO_INTERACTION=1
+    UV_PYTHON_INSTALL_DIR="$RUNTIME_DIR/python" UV_PYTHON_DOWNLOADS=never UV_PYTHON_PREFERENCE=only-managed
+    UV_CACHE_DIR="$dir/.cache/uv" UV_LINK_MODE=copy BUN_INSTALL_CACHE_DIR="$dir/.cache/bun" DO_NOT_TRACK=1)
   rc=0
+  # If memory runs out (a web-app build can take a lot), the kernel kills these steps first, never
+  # the panel or the other bots (oom_score_adj is inherited); the step then fails with a clear error.
   # stdout goes to stderr too: PHP CLI prints fatal errors on stdout, and the panel shows stderr.
-  (cd -P -- "$dir" && timeout 900 runuser -u "$user" -- env -i PATH="$PATH" LANG=C.UTF-8 HOME="$home" \
-    COMPOSER_HOME="$home" COMPOSER_NO_INTERACTION=1 "${cmd[@]}") >&2 || rc=$?
+  if [[ -n $envf ]]; then
+    # The bot's secrets go in through stdin and the environment, never the command line (ps).
+    # Read the already-open descriptor: opening /dev/stdin would reopen the root-only file as the
+    # bot's user and fail. Each validated KEY=value line is exported as one word, never parsed.
+    (cd -P -- "$dir" && echo 900 > /proc/self/oom_score_adj && timeout "$limit" runuser -u "$user" -- env -i "${base[@]}" \
+      bash -c 'while IFS= read -r line || [[ -n $line ]]; do [[ -z $line ]] || export "$line" || exit 1; done; exec "$@" </dev/null' \
+      fleetpanel-run "${cmd[@]}" <"$envf") >&2 || rc=$?
+  else
+    (cd -P -- "$dir" && echo 900 > /proc/self/oom_score_adj && timeout "$limit" runuser -u "$user" -- env -i "${base[@]}" "${cmd[@]}" </dev/null) >&2 || rc=$?
+  fi
   rm -rf -- "$home"
+  [[ $rc -ne 137 ]] || die "$task was killed, probably out of memory: free some RAM or add swap, then press Repair"
   [[ $rc -eq 0 ]] || die "$task failed with exit code $rc"
 }
 
@@ -271,11 +345,339 @@ EOF
   reload_services "$php"
 }
 
+# download URL FILE SHA256: HTTPS only, and the file must match the pinned checksum.
+download() {
+  curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$2" "$1" || die "download failed: $1"
+  printf '%s  %s\n' "$3" "$2" | sha256sum -c --quiet - >/dev/null 2>&1 || die "checksum mismatch for $1"
+}
+
+write_pyrun() {
+  install -d -m 0755 "$(dirname "$PYRUN")"
+  cat > "$PYRUN.tmp" <<'EOF'
+"""FleetPanel launcher: runs a Python bot with its web server bound to loopback only.
+
+Some bots hard-code uvicorn's host to 0.0.0.0, which would publish their API on every
+interface without TLS. nginx is the only way in, so the host is forced to 127.0.0.1.
+
+It also logs background tasks that die with an exception: a bot that starts its Telegram
+client with asyncio.create_task() and only awaits it at shutdown would otherwise hang
+silently when, for example, its API id/hash is wrong.
+"""
+import asyncio
+import runpy
+import sys
+import traceback
+
+import uvicorn
+
+_init = uvicorn.Config.__init__
+
+
+def _loopback_only(self, *args, **kwargs):
+    kwargs["host"] = "127.0.0.1"
+    _init(self, *args, **kwargs)
+
+
+uvicorn.Config.__init__ = _loopback_only
+
+_create_task = asyncio.create_task
+
+
+def _report_failure(task):
+    if task.cancelled() or task.exception() is None:
+        return
+    print(f"FleetPanel: background task {task.get_name()} failed:", file=sys.stderr)
+    traceback.print_exception(task.exception(), file=sys.stderr)
+    sys.stderr.flush()
+
+
+def _create_logged_task(coro, **kwargs):
+    task = _create_task(coro, **kwargs)
+    task.add_done_callback(_report_failure)
+    return task
+
+
+asyncio.create_task = _create_logged_task
+
+script = sys.argv[1]
+sys.argv = sys.argv[1:]
+sys.path.insert(0, script.rsplit("/", 1)[0])
+runpy.run_path(script, run_name="__main__")
+EOF
+  chmod 0644 "$PYRUN.tmp"
+  mv -f "$PYRUN.tmp" "$PYRUN"
+}
+
+# runtime-python
+# Installs what service bots need, once per server: Redis and build tools (apt), and pinned,
+# checksum-verified uv, bun and Python. Re-running it is cheap and repairs a broken install.
+cmd_runtime_python() {
+  need_args $# 0
+  local arch bun_arch uv_sha bun_sha pkg tmp missing=() fresh_redis=0
+  case "$(uname -m)" in
+    x86_64)
+      arch=x86_64 bun_arch=x64
+      uv_sha=8cc1cd82d434ec565376f98bd938d4b715b5791a80ff2d3aa78821cf85091b4b
+      bun_sha=36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913
+      ;;
+    aarch64)
+      arch=aarch64 bun_arch=aarch64
+      uv_sha=d74f23949fd07be4970f293d06ca99d87cd2a78a341c3d7b7fc0df7bc2d8a145
+      bun_sha=54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7
+      ;;
+    *) die "unsupported CPU architecture: $(uname -m)" ;;
+  esac
+
+  for pkg in redis-server build-essential pkg-config libffi-dev libssl-dev unzip; do
+    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
+  done
+  if (( ${#missing[@]} )); then
+    [[ " ${missing[*]} " == *" redis-server "* ]] && fresh_redis=1
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y -qq --no-install-recommends "${missing[@]}" >&2 \
+      || { apt-get update -qq >&2 && apt-get install -y -qq --no-install-recommends "${missing[@]}" >&2; } \
+      || die "could not install: ${missing[*]}"
+    # Every bot runs its own Redis; the distribution's shared one is not needed (if we added it).
+    if (( fresh_redis )); then systemctl disable --now redis-server >/dev/null 2>&1 || true; fi
+  fi
+  [[ -x $REDIS_SERVER ]] || die "$REDIS_SERVER is missing"
+
+  install -d -m 0755 "$RUNTIME_DIR" "$RUNTIME_DIR/bin" "$RUNTIME_DIR/python"
+  tmp="$(mktemp -d)"
+  if [[ "$("$RUNTIME_DIR/bin/uv" --version 2>/dev/null)" != "uv $UV_VERSION"* ]]; then
+    download "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$arch-unknown-linux-gnu.tar.gz" "$tmp/uv.tar.gz" "$uv_sha"
+    tar -xzf "$tmp/uv.tar.gz" -C "$tmp"
+    install -m 0755 "$tmp/uv-$arch-unknown-linux-gnu/uv" "$RUNTIME_DIR/bin/uv"
+  fi
+  if [[ "$("$RUNTIME_DIR/bin/bun" --version 2>/dev/null)" != "$BUN_VERSION" ]]; then
+    download "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-$bun_arch.zip" "$tmp/bun.zip" "$bun_sha"
+    unzip -q -o "$tmp/bun.zip" -d "$tmp"
+    install -m 0755 "$tmp/bun-linux-$bun_arch/bun" "$RUNTIME_DIR/bin/bun"
+  fi
+  rm -rf -- "$tmp"
+  # uv checks the interpreter download against the checksums built into this pinned uv release.
+  UV_PYTHON_INSTALL_DIR="$RUNTIME_DIR/python" UV_PYTHON_BIN_DIR="$RUNTIME_DIR/python/bin" UV_NO_CACHE=1 \
+    "$RUNTIME_DIR/bin/uv" python install "$PYTHON_SERIES" >&2 || die "could not install Python $PYTHON_SERIES"
+  chmod -R a+rX "$RUNTIME_DIR"
+  write_pyrun
+}
+
+# instance-env SLUG   (stdin: KEY=value lines)
+# Stores a service bot's environment (bot token, database URL, ...) readable by root only;
+# systemd and instance-run hand it to the bot's process, never on a command line.
+cmd_instance_env() {
+  need_args $# 1
+  local slug="$1" line key tmp n=0
+  check_slug "$slug"
+  install -d -m 0700 "$ENV_DIR"
+  tmp="$(mktemp "$ENV_DIR/.env.XXXXXX")"
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ -z $line ]] && continue
+    [[ $line =~ $RE_ENV_LINE ]] || { rm -f "$tmp"; die "invalid environment line"; }
+    key="${line%%=*}"
+    [[ $ENV_KEYS == *" $key "* ]] || { rm -f "$tmp"; die "environment variable $key is not allowed"; }
+    printf '%s\n' "$line" >> "$tmp"
+    n=$((n + 1))
+  done
+  (( n > 0 )) || { rm -f "$tmp"; die "empty environment"; }
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$(env_file "$slug")"
+}
+
+# service-create SLUG DOMAIN PORT
+# systemd services for the bot and its Redis (sandboxed, as the bot's user) and an nginx
+# reverse proxy to 127.0.0.1:PORT. Starts (or restarts) the bot.
+cmd_service_create() {
+  need_args $# 3
+  local slug="$1" domain="$2" port="$3" user dir envf vhost link other sub
+  check_slug "$slug"
+  check_domain "$domain"
+  [[ $port =~ $RE_PORT ]] || die "invalid port"
+  user="$(instance_user "$slug")"
+  dir="$(instance_dir "$slug")"
+  envf="$(env_file "$slug")"
+  vhost="$(vhost_file "$slug")"
+  link="$(vhost_link "$slug")"
+  require_instance_dir "$dir"
+  require_runtime
+  [[ -f $envf ]] || die "the bot's environment is missing (instance-env)"
+  [[ -x $dir/.venv/bin/python && -f $dir/main.py ]] || die "the bot is not installed (python-deps)"
+  # The control plane created these (instance-perms handed them over); never create or chown
+  # paths inside the instance as root here, a symlink planted there could redirect it.
+  for sub in workdir logs sessions data/redis; do
+    [[ -d $dir/$sub && ! -L $dir/$sub ]] || die "missing instance directory $sub"
+  done
+  id -u "$user" >/dev/null 2>&1 || die "instance user does not exist (run instance-perms first)"
+  if ss -Hltn "sport = :$port" 2>/dev/null | grep -q . && ! systemctl is-active --quiet "$(bot_unit "$slug")"; then
+    die "port $port is already in use by another program"
+  fi
+  ensure_server_names_hash
+  other="$(domain_used_by "$domain" "$link")"
+  [[ -z $other ]] || die "domain $domain is already served by $other; remove that site or use another domain"
+
+  cat > "$(unit_path "$(redis_unit "$slug")")" <<EOF
+# Managed by FleetPanel. Instance: $slug
+[Unit]
+Description=FleetPanel Redis for $slug
+PartOf=$(bot_unit "$slug")
+
+[Service]
+User=$user
+Group=$user
+ExecStart=$REDIS_SERVER --port 0 --unixsocket $dir/data/redis/redis.sock --unixsocketperm 700 --dir $dir/data/redis --save 60 1 --appendonly no --daemonize no
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=$dir/data/redis
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "$(unit_path "$(bot_unit "$slug")")" <<EOF
+# Managed by FleetPanel. Instance: $slug
+[Unit]
+Description=FleetPanel bot $slug
+Wants=network-online.target
+After=network-online.target mariadb.service mysql.service $(redis_unit "$slug")
+Requires=$(redis_unit "$slug")
+
+[Service]
+User=$user
+Group=$user
+WorkingDirectory=$dir/workdir
+EnvironmentFile=$envf
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=$dir/.venv/bin/python $PYRUN $dir/main.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=$dir
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 0644 "$(unit_path "$(redis_unit "$slug")")" "$(unit_path "$(bot_unit "$slug")")"
+
+  cat > "$vhost" <<EOF
+# Managed by FleetPanel. Instance: $slug
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $domain;
+    client_max_body_size 32m;
+    access_log /var/log/nginx/fleetpanel-$slug.access.log;
+    error_log /var/log/nginx/fleetpanel-$slug.error.log;
+
+    # The bot's interactive API documentation maps every endpoint; keep it private.
+    location ~ ^/(docs|redoc|openapi\.json)(/|\$) { return 404; }
+
+    location / {
+        proxy_pass http://127.0.0.1:$port;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 120s;
+    }
+}
+EOF
+  ln -sfn "$vhost" "$link"
+  if ! nginx_ok; then
+    rm -f "$vhost" "$link"
+    die "generated nginx configuration failed validation; nothing was enabled. ${CONFIG_ERROR}"
+  fi
+  systemctl daemon-reload
+  systemctl enable --now "$(redis_unit "$slug")" >/dev/null 2>&1 || die "Redis for $slug did not start: $(journalctl -u "$(redis_unit "$slug")" -n 5 --no-pager -o cat 2>/dev/null | tr '\n' ' ')"
+  systemctl enable "$(bot_unit "$slug")" >/dev/null 2>&1
+  systemctl restart "$(bot_unit "$slug")"
+  systemctl reload nginx
+}
+
+# service-wait SLUG PORT
+# Waits until the bot's web server answers on loopback and listens nowhere else.
+cmd_service_wait() {
+  need_args $# 2
+  local slug="$1" port="$2" unit i listeners invocation
+  check_slug "$slug"
+  [[ $port =~ $RE_PORT ]] || die "invalid port"
+  unit="$(bot_unit "$slug")"
+  for i in $(seq 1 45); do
+    if curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:$port/"; then
+      listeners="$(ss -Hltn "sport = :$port" 2>/dev/null | awk '{print $4}' | grep -v '^127\.0\.0\.1:' || true)"
+      if [[ -n $listeners ]]; then
+        systemctl stop "$unit" || true
+        die "the bot also listens on a public address ($listeners); it was stopped"
+      fi
+      # The web server can be up while the Telegram client (a background task) has already died;
+      # the launcher logs that as "FleetPanel: background task ... failed". Give it time to log in.
+      sleep 15
+      invocation="$(systemctl show -p InvocationID --value "$unit" 2>/dev/null || true)"
+      if [[ -n $invocation ]] && journalctl "_SYSTEMD_INVOCATION_ID=$invocation" -o cat --no-pager 2>/dev/null | grep -q '^FleetPanel: background task'; then
+        journalctl "_SYSTEMD_INVOCATION_ID=$invocation" -o cat --no-pager 2>/dev/null | grep -A 12 '^FleetPanel: background task' | tail -n 14 >&2 || true
+        die "the bot's web server started but its connection to Telegram failed (see above; check the API id/hash and that this server can reach Telegram)"
+      fi
+      return 0
+    fi
+    # Restart=always keeps a crashing bot in activating/auto-restart; give up after a few rounds.
+    if (( i > 10 )) && [[ "$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)" -ge 3 ]]; then break; fi
+    sleep 2
+  done
+  journalctl -u "$unit" -n 25 --no-pager -o cat >&2 2>/dev/null || true
+  die "the bot did not start; its last log lines are above (journalctl -u $unit)"
+}
+
+service_enable() {
+  local slug="$1" vhost link
+  vhost="$(vhost_file "$slug")"
+  link="$(vhost_link "$slug")"
+  [[ -f $vhost && -f "$(unit_path "$(bot_unit "$slug")")" ]] || die "instance is not provisioned"
+  systemctl enable --now "$(redis_unit "$slug")" "$(bot_unit "$slug")" >/dev/null 2>&1 || die "the bot's services did not start (journalctl -u $(bot_unit "$slug"))"
+  ln -sfn "$vhost" "$link"
+  if ! nginx_ok; then
+    rm -f "$link"
+    die "configuration test failed; site left disabled. ${CONFIG_ERROR}"
+  fi
+  systemctl reload nginx
+}
+
+service_disable() {
+  local slug="$1"
+  rm -f "$(vhost_link "$slug")"
+  systemctl disable --now "$(bot_unit "$slug")" "$(redis_unit "$slug")" >/dev/null 2>&1 || true
+  nginx_ok || die "configuration test failed after disabling. ${CONFIG_ERROR}"
+  systemctl reload nginx
+}
+
+service_remove() {
+  local slug="$1" unit
+  for unit in "$(bot_unit "$slug")" "$(redis_unit "$slug")"; do
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    rm -f "$(unit_path "$unit")"
+  done
+  systemctl daemon-reload
+  rm -f "$(env_file "$slug")"
+}
+
 # instance-enable SLUG
 cmd_instance_enable() {
   need_args $# 1
   local slug="$1" php pool vhost link
   check_slug "$slug"
+  if is_service_instance "$slug"; then service_enable "$slug"; return; fi
   php="$(php_version)"
   pool="$(pool_file "$slug" "$php")"
   vhost="$(vhost_file "$slug")"
@@ -296,6 +698,7 @@ cmd_instance_disable() {
   need_args $# 1
   local slug="$1" php pool
   check_slug "$slug"
+  if is_service_instance "$slug"; then service_disable "$slug"; return; fi
   php="$(php_version)"
   pool="$(pool_file "$slug" "$php")"
   rm -f "$(vhost_link "$slug")"
@@ -314,6 +717,8 @@ cmd_instance_remove() {
   user="$(instance_user "$slug")"
   dir="$(instance_dir "$slug")"
 
+  # A service bot first: stop it before its files and user disappear.
+  service_remove "$slug"
   rm -f "$(vhost_link "$slug")" "$(vhost_file "$slug")" "$pool" "$pool.disabled"
   if config_ok "$php"; then reload_services "$php"; fi
 
@@ -393,6 +798,10 @@ main() {
     db-create)        cmd_db_create "$@" ;;
     db-drop)          cmd_db_drop "$@" ;;
     cert-issue)       cmd_cert_issue "$@" ;;
+    runtime-python)   cmd_runtime_python "$@" ;;
+    instance-env)     cmd_instance_env "$@" ;;
+    service-create)   cmd_service_create "$@" ;;
+    service-wait)     cmd_service_wait "$@" ;;
     *) die "unknown command '${cmd}'" ;;
   esac
 }

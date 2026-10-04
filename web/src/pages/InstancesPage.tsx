@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Archive, ExternalLink, Play, Plus, RotateCcw, Search, Server, Square, Trash2 } from 'lucide-react';
-import type { Instance, InstanceStatus, Permission } from '../api';
-import { Button, Card, EmptyState, ErrorBanner, Input, PageHeader, Select, Spinner, StatusBadge, Time, cx } from '../components/ui';
+import { api, instanceWebUrl, type Instance, type InstanceStatus, type Permission } from '../api';
+import { Button, Card, EmptyState, ErrorBanner, Input, PageHeader, Select, Spinner, StatusBadge, Time, cx, useResource } from '../components/ui';
 import { useInstanceActions } from './instanceActions';
 
 const FILTERS: Array<{ id: InstanceStatus | 'all'; label: string }> = [
@@ -95,6 +95,7 @@ export function InstancesPage({
   onChanged: (inst: Instance) => void;
   onRemoved: (id: number) => void;
 }) {
+  const providerInfo = useResource(api.providers, []);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<InstanceStatus | 'all'>('all');
   const [provider, setProvider] = useState('all');
@@ -115,7 +116,7 @@ export function InstancesPage({
     <div>
       <PageHeader
         title="Instances"
-        description="Each instance is an isolated bot: its own Linux user, PHP-FPM pool, MySQL database, nginx site and certificate."
+        description="Each instance is an isolated bot: its own Linux user, MySQL database, nginx site, certificate and PHP pool or service."
         actions={
           can('instances.create') && (
             <Button variant="primary" icon={<Plus className="w-3.5 h-3.5" />} onClick={onCreate}>
@@ -222,10 +223,10 @@ export function InstancesPage({
                       <div className="flex items-center justify-end gap-1.5">
                         <InstanceActionButtons inst={i} can={can} actions={actions} compact />
                         <a
-                          href={`https://${i.domain}/`}
+                          href={instanceWebUrl(i, providerInfo.data)}
                           target="_blank"
                           rel="noreferrer noopener"
-                          title={`Open https://${i.domain}`}
+                          title={`Open ${instanceWebUrl(i, providerInfo.data)}`}
                           className="p-1.5 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800"
                         >
                           <ExternalLink className="w-3.5 h-3.5" />

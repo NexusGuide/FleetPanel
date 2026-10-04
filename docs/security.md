@@ -59,6 +59,19 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 
 ## Isolation on the host
 
+Service bots (PasarguardBot) additionally:
+
+- run as systemd services under `fp-<slug>` with `ProtectSystem=strict` (only their own folder is
+  writable), `NoNewPrivileges`, `PrivateTmp`, kernel/cgroup protection and memory limits;
+- get their secrets from `/etc/fleetpanel/instances/<slug>.env` (root-only, allowlisted keys, shell-safe
+  values), never from a file in their folder or from a command line;
+- each have their own Redis on a Unix socket with mode 700 (no TCP, no shared keyspace);
+- have their web server forced onto 127.0.0.1 (the upstream code binds 0.0.0.0); provisioning stops the bot
+  if it listens anywhere else, and nginx hides the API documentation;
+- get no `www-data` access to their folder (nginx only proxies to them);
+- use toolchains pinned by version and SHA-256 (uv, bun) and lock files with hashes (`uv.lock`,
+  `bun.lock`); dependencies are installed as the bot's user.
+
 - Each instance has its own Linux user `fp-<slug>` and PHP-FPM pool with
   `open_basedir = <instance dir>:/tmp`, `display_errors off`.
 - `instance-perms` (helper): files owned by `fp-<slug>`, `chmod u=rwX,g=rX,o=`; ACLs grant the
@@ -87,6 +100,23 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
   which disables client commands: a table name crafted by a compromised bot cannot run shell commands.
 - Control-plane backups (`src/cli.ts`, `bin/fleetpanel`): SQLite online-backup copy of the database plus
   the master key, mode 600, in `/opt/fleetpanel/backups`. They must be stored off the server.
+
+## Panel backups (.fleet)
+
+- Encrypted with AES-256-GCM under a key from X25519 (one-off key per file + the panel's backup public key)
+  and HKDF-SHA256; the header (host, version, keys) is authenticated.
+- The private key is stored only inside the files, encrypted with a scrypt key (N=2^16, r=8, p=1) from the
+  recovery passphrase, which is never stored. The server cannot decrypt backups it already sent.
+- Each file is decrypted once right after encryption to verify it; login sessions are removed from the copy.
+- Telegram bot token: encrypted with the master key in the panel database. Configuring backups needs the
+  Owner-only `settings.manage` permission.
+
+## Database import
+
+- Uploads only through the import path (512 MB limit there; 1 MB elsewhere), streamed to a private scratch
+  directory; `.zip` entries are read with `unzip -p` (no extraction to disk).
+- Refused: mysql client commands. Removed: `CREATE DATABASE`, `USE`, `DEFINER`. Imported as the bot's
+  own database user with `--binary-mode`, after a safety backup.
 
 ## Audit log
 

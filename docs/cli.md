@@ -14,6 +14,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | `fleetpanel doctor` | Runs the checks below and prints `[PASS]`, `[WARN]` or `[FAIL]` for each. Exits non-zero if anything failed. |
 | `fleetpanel start` / `stop` / `restart` | Controls `fleetpanel.service`. Bots keep running when the panel is stopped. |
 | `fleetpanel logs [N] [-f]` | The last N lines (default 100) of the panel's journal; `-f` follows. Secrets are masked before they are logged. |
+| `fleetpanel logs SLUG [N] [-f]` | The journal of a Python bot's service (`fleetpanel-bot-SLUG`). |
 
 ### Doctor checks
 
@@ -34,7 +35,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | Composer | not installed |
 | Certificate renewal | *warn* when no certbot timer or cron job exists |
 | Firewall | *warn* when no firewall is active (optional), or ufw is active but ports 80/443 are not allowed |
-| Instances | *warn* for every instance in the error state |
+| Instances | *warn* for every instance in the error state; *fail* when a running Python bot's service is not active |
 
 ## Instances and backups
 
@@ -44,6 +45,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | `fleetpanel backups [SLUG]` | Lists instance backups (all, or one instance) and control-plane backup files. |
 | `fleetpanel backup` | **Control-plane backup:** a consistent copy of the panel database plus the master key, as `/opt/fleetpanel/backups/control-plane-<time>.tar.gz` (mode 600). Copy it off the server: anyone holding it can decrypt the stored bot tokens. |
 | `fleetpanel backup SLUG` | Backs up one instance: its files and a `mysqldump` of its database. Same format as backups taken in the panel. |
+| `fleetpanel restore FILE.fleet` | Decrypts an encrypted panel backup (from *Settings → Telegram backup* or *Download*) with the recovery passphrase, then restores it like a control-plane backup. Bots missing on this server are marked for Repair; see [backup.md](backup.md). |
 | `fleetpanel restore FILE.tar.gz` | Restores a control-plane backup. Asks you to type `RESTORE`, takes a safety backup of the current state, replaces the database and master key, and starts the panel; if it does not become healthy, the safety backup is put back. Bot files and databases are not touched. |
 | `fleetpanel restore BACKUP_ID` | Restores an instance backup (IDs from `fleetpanel backups`). A pre-restore safety backup is taken first; files are rolled back if the restore fails. |
 
@@ -64,7 +66,8 @@ per-instance "busy" lock.
 | --- | --- |
 | `fleetpanel version` | Installed version, commit and update channel. |
 | `fleetpanel channel` | Shows the update channel and the latest released tags. |
-| `fleetpanel channel REF` | Sets the channel to a branch (`main`) or a release tag (`v0.3.0`). Takes effect on the next update. |
+| Menu item 9 | Pick the channel from a list (`main`, `dev`, or one of the latest released versions; test builds are marked) and update right away. |
+| `fleetpanel channel REF` | Sets the channel: `main` (stable), `dev` (test builds, new features first) or a release tag (`v0.3.0`). Takes effect on the next update. Moving from `dev` back to `main` can look like a downgrade (`0.4.0-beta.1` is older than `0.4.0`); `update` asks before installing an older version. |
 | `fleetpanel update` | Updates to the latest commit of the channel (see below). |
 
 ### Update

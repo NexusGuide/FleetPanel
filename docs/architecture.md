@@ -70,6 +70,12 @@ recorded in `last_error` with the step name:
 9. Issue the certificate (helper → certbot)
 10. Register the Telegram webhook with the instance's secret
 
+A Python service bot (PasarguardBot) replaces steps 2, 3, 6 and 7 with: prepare the pinned Python runtime
+(once per server), write the bot's environment file (helper), `uv sync --frozen`, build the web app with
+`bun`, `alembic upgrade head` (each as the bot's user), and in step 8 creates its Redis and bot systemd
+services plus an nginx reverse proxy instead of a PHP pool; step 10 deletes any old webhook and waits until
+the bot answers on its loopback port. See [providers.md](providers.md#python-service-bots-pasarguardbot).
+
 Only one long-running operation may run per instance at a time; anything interrupted by a restart is
 marked `error` at boot instead of being left in a misleading state.
 

@@ -1,21 +1,11 @@
-import { useEffect, type ReactNode } from 'react';
-import { Archive, Copy, ExternalLink, Loader2, X } from 'lucide-react';
-import { api, type Instance, type Permission } from '../api';
-import { ErrorBanner, Notice, Spinner, StatusBadge, Time, formatDate, useResource, useToast } from '../components/ui';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Archive, Copy, DatabaseBackup, ExternalLink, Loader2, X } from 'lucide-react';
+import { api, instanceWebUrl, type Instance, type Permission } from '../api';
+import { Button, ErrorBanner, Notice, Spinner, StatusBadge, Time, formatDate, useResource, useToast } from '../components/ui';
 import { InstanceActionButtons } from './InstancesPage';
 import { useInstanceActions } from './instanceActions';
 import { BackupTable } from './BackupsPage';
-
-const STEPS = [
-  'Download the bot code',
-  'Write config.php',
-  'Install PHP dependencies (composer)',
-  'Create the MySQL database and tables',
-  'Set file permissions',
-  'Create PHP pool + nginx site',
-  'Issue the TLS certificate',
-  'Register the Telegram webhook',
-];
+import { ImportDatabaseModal } from './ImportDatabaseModal';
 
 function Row({ label, children, copy }: { label: string; children: ReactNode; copy?: string }) {
   const toast = useToast();
@@ -79,7 +69,9 @@ export function InstanceDrawer({
 
   // The shared list can lag behind (e.g. right after creation), so also fetch this one directly.
   const fetched = useResource(() => api.instance(instanceId), [instanceId]);
+  const providers = useResource(api.providers, []);
   const inst = instance ?? fetched.data;
+  const [importing, setImporting] = useState(false);
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
@@ -107,16 +99,10 @@ export function InstanceDrawer({
               <InstanceActionButtons inst={inst} can={can} actions={actions} />
 
               {inst.status === 'provisioning' && (
-                <div className="p-3 rounded-md bg-blue-950/30 border border-blue-900/60 text-xs text-blue-200 space-y-2">
+                <div className="p-3 rounded-md bg-blue-950/30 border border-blue-900/60 text-xs text-blue-200">
                   <p className="flex items-center gap-2 font-medium">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Installing… this usually takes 1–3 minutes.
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Installing… usually 1–5 minutes.
                   </p>
-                  <ol className="list-decimal list-inside text-blue-200/70 space-y-0.5">
-                    {STEPS.map((s) => (
-                      <li key={s}>{s}</li>
-                    ))}
-                  </ol>
-                  <p className="text-blue-200/60">This page updates automatically when it finishes.</p>
                 </div>
               )}
 
@@ -125,8 +111,7 @@ export function InstanceDrawer({
                   <ErrorBanner error={inst.last_error ?? 'The last operation failed without a message.'} />
                   {can('instances.create') && (
                     <p className="text-[11px] text-slate-400">
-                      Fix the cause (usually DNS not pointing at this server, or port 80 blocked), then press{' '}
-                      <b>Reprovision</b>. Your database and secrets are kept.
+                      Fix the cause above, then press <b>Reprovision</b>. The database and settings are kept.
                     </p>
                   )}
                 </div>
@@ -144,8 +129,16 @@ export function InstanceDrawer({
                     {inst.source_commit ? inst.source_commit.slice(0, 12) : '—'}
                   </Row>
                   <Row label="Domain" copy={inst.domain}>
-                    <a href={`https://${inst.domain}/`} target="_blank" rel="noreferrer noopener" className="hover:text-blue-300 inline-flex items-center gap-1">
-                      {inst.domain} <ExternalLink className="w-3 h-3" />
+                    {inst.domain}
+                  </Row>
+                  <Row label="Web panel" copy={instanceWebUrl(inst, providers.data)}>
+                    <a
+                      href={instanceWebUrl(inst, providers.data)}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="hover:text-blue-300 inline-flex items-center gap-1"
+                    >
+                      /{providers.data?.find((p) => p.id === inst.provider)?.web_path ?? ''} <ExternalLink className="w-3 h-3" />
                     </a>
                   </Row>
                   <Row label="Telegram bot">
@@ -165,15 +158,17 @@ export function InstanceDrawer({
                   </Row>
                   <Row label="Database user">{inst.db_user}</Row>
                   <Row label="Linux user">fp-{inst.slug}</Row>
+                  {inst.app_port !== null && (
+                    <Row label="Service">
+                      fleetpanel-bot-{inst.slug} · 127.0.0.1:{inst.app_port}
+                    </Row>
+                  )}
                   <Row label="Files">/opt/fleetpanel/instances/{inst.slug}</Row>
                   <Row label="Created">{formatDate(inst.created_at)}</Row>
                   <Row label="Last change">
                     <Time value={inst.updated_at} />
                   </Row>
                 </dl>
-                <p className="text-[11px] text-slate-500 mt-2">
-                  Bot token, database password and webhook secret are encrypted at rest and never sent to the browser.
-                </p>
               </section>
 
               {can('backups.read') && (
@@ -182,6 +177,11 @@ export function InstanceDrawer({
                     <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
                       <Archive className="w-3.5 h-3.5" /> Backups
                     </h3>
+                    {can('backups.restore') && (inst.status === 'running' || inst.status === 'stopped') && (
+                      <Button size="sm" icon={<DatabaseBackup className="w-3 h-3" />} onClick={() => setImporting(true)}>
+                        Import database
+                      </Button>
+                    )}
                   </div>
                   <div className="rounded-lg bg-panel border border-slate-800/80 overflow-hidden">
                     {backups.error ? (
@@ -208,6 +208,16 @@ export function InstanceDrawer({
           )}
         </div>
       </aside>
+      {importing && inst && (
+        <ImportDatabaseModal
+          inst={inst}
+          onClose={() => setImporting(false)}
+          onDone={() => {
+            void backups.reload();
+            api.instance(inst.id).then(onChanged, () => undefined);
+          }}
+        />
+      )}
     </div>
   );
 }

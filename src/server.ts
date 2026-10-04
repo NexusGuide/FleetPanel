@@ -11,6 +11,8 @@ import { systemToolchain } from './system/toolchain.js';
 import { TelegramApi } from './services/telegram.js';
 import { BackupService } from './services/backups.js';
 import { InstanceService } from './services/instances.js';
+import { ControlBackupService } from './services/controlBackup.js';
+import { SettingsStore } from './settings.js';
 import { log } from './log.js';
 import { VERSION } from './version.js';
 
@@ -22,6 +24,7 @@ function main(): void {
   const sessions = new SessionStore(db);
   const secrets = new SecretStore(db, box);
   const ops = new SudoHelper(config.helperPath);
+  const telegram = new TelegramApi();
 
   const backups = new BackupService({
     db,
@@ -37,13 +40,24 @@ function main(): void {
     audit,
     secrets,
     ops,
-    telegram: new TelegramApi(),
+    telegram,
     backups,
     git: gitCheckout,
     tools: systemToolchain,
     instancesDir: config.instancesDir,
   });
   instances.recoverInterrupted();
+  instances.flagMissingInstalls();
+
+  const controlBackup = new ControlBackupService({
+    db,
+    settings: new SettingsStore(db, box),
+    telegram,
+    audit,
+    masterKeyFile: config.masterKeyFile,
+    version: VERSION,
+  });
+  controlBackup.start();
 
   const admins = (db.prepare('SELECT COUNT(*) AS n FROM admins').get() as { n: number }).n;
   if (admins === 0) log.warn('No administrators exist yet. Create one with: sudo fleetpanel create-admin <username>');
@@ -54,6 +68,7 @@ function main(): void {
     audit,
     instances,
     backups,
+    controlBackup,
     cookieSecure: config.cookieSecure,
     trustProxy: config.trustProxy,
     dataRoot: config.root,
@@ -64,6 +79,9 @@ function main(): void {
   const server = app.listen(config.port, config.host, () => {
     log.info(`FleetPanel ${VERSION} listening on ${config.host}:${config.port}`);
   });
+  // A bot database upload plus its import can outlast Node's 5-minute default; nginx in front
+  // still limits how long a client may stall between reads.
+  server.requestTimeout = 60 * 60_000;
 
   const shutdown = (signal: string) => {
     log.info(`Received ${signal}, shutting down`);

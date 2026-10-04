@@ -13,6 +13,7 @@ export type Permission =
   | 'backups.create'
   | 'backups.restore'
   | 'admins.manage'
+  | 'settings.manage'
   | 'audit.read';
 
 export interface Me {
@@ -33,6 +34,7 @@ export interface Instance {
   bot_username: string | null;
   admin_telegram_id: string;
   source_commit: string | null;
+  app_port: number | null;
   status: InstanceStatus;
   last_error: string | null;
   created_at: string;
@@ -100,6 +102,17 @@ export interface Provider {
   repo_url: string;
   version: string;
   commit: string;
+  /** php: served by PHP-FPM with a Telegram webhook; python: a long-running service. */
+  runtime: 'php' | 'python';
+  extra_fields: Array<'api_id' | 'api_hash'>;
+  /** The bot's own web page, relative to its domain (e.g. "panel/"). */
+  web_path: string;
+}
+
+/** Link to an instance's own web page (its admin panel or web app), never the webhook at the root. */
+export function instanceWebUrl(inst: Pick<Instance, 'domain' | 'provider'>, providers: Provider[] | null): string {
+  const webPath = providers?.find((p) => p.id === inst.provider)?.web_path ?? '';
+  return `https://${inst.domain}/${webPath}`;
 }
 
 export interface InstanceCheck {
@@ -113,6 +126,8 @@ export interface CreateInstanceInput {
   domain: string;
   bot_token: string;
   admin_telegram_id: string;
+  api_id?: string;
+  api_hash?: string;
 }
 
 // Mirrors src/security/validation.ts so forms can explain problems before submitting.
@@ -121,6 +136,8 @@ export const DOMAIN_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\
 export const BOT_TOKEN_RE = /^\d{5,15}:[A-Za-z0-9_-]{30,64}$/;
 export const TELEGRAM_ID_RE = /^\d{1,20}$/;
 export const USERNAME_RE = /^[A-Za-z0-9_.-]{3,32}$/;
+export const API_ID_RE = /^\d{3,12}$/;
+export const API_HASH_RE = /^[0-9a-f]{32}$/;
 
 /** Same rules as the server's passwordPolicyErrors(). */
 export function passwordProblems(password: string): string[] {
@@ -212,6 +229,64 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export type BackupSchedule = 'hourly' | '6h' | 'daily';
+
+export interface BackupSettings {
+  enabled: boolean;
+  chat_id: string;
+  thread_id: string;
+  schedule: BackupSchedule;
+  has_token: boolean;
+  bot_username: string | null;
+  has_passphrase: boolean;
+  last_sent_at: string | null;
+  last_attempt_at: string | null;
+  last_error: string | null;
+  last_file: string | null;
+}
+
+export interface BackupSettingsInput {
+  enabled: boolean;
+  chat_id: string;
+  thread_id?: string;
+  schedule: BackupSchedule;
+  bot_token?: string;
+  passphrase?: string;
+}
+
+/** Uploads a bot database backup with progress (fetch cannot report upload progress). */
+function uploadFile<T>(path: string, file: File, onProgress?: (fraction: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', path);
+    xhr.setRequestHeader('content-type', 'application/octet-stream');
+    xhr.setRequestHeader('accept', 'application/json');
+    if (csrfToken) xhr.setRequestHeader('x-csrf-token', csrfToken);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded / e.total);
+    };
+    xhr.onerror = () => reject(new ApiError(0, 'network_error', 'The upload was interrupted.'));
+    xhr.onload = () => {
+      let data: unknown = null;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        data = null;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as T);
+      else {
+        if (xhr.status === 401) onUnauthorized?.();
+        reject(
+          xhr.status === 413 && !data
+            ? new ApiError(413, 'upload_too_large', 'The file is too large for the panel (512 MB at most).')
+            : describeError(xhr.status, data as ErrorBody | null),
+        );
+      }
+    };
+    xhr.send(file);
+  });
+}
+
 type MeResponse = ({ authenticated: true; csrf_token: string } & Me) | { authenticated: false };
 
 export const api = {
@@ -275,4 +350,13 @@ export const api = {
 
   system: () => request<SystemInfo>('GET', '/api/system'),
   providers: () => request<{ providers: Provider[] }>('GET', '/api/system/providers').then((r) => r.providers),
+
+  backupSettings: () => request<{ backup: BackupSettings }>('GET', '/api/settings/backup').then((r) => r.backup),
+  saveBackupSettings: (input: BackupSettingsInput) =>
+    request<{ backup: BackupSettings }>('PUT', '/api/settings/backup', input).then((r) => r.backup),
+  testBackup: () => request<{ ok: true }>('POST', '/api/settings/backup/test'),
+  runBackup: () => request<{ file: string }>('POST', '/api/settings/backup/run'),
+  backupDownloadUrl: '/api/settings/backup/download',
+  importDatabase: (id: number, file: File, onProgress?: (fraction: number) => void) =>
+    uploadFile<{ safety_backup_id: string }>(`/api/instances/${id}/import-db`, file, onProgress),
 };

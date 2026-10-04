@@ -8,11 +8,14 @@ import { can, permissionsFor } from '../src/security/rbac.js';
 import { maskSecrets } from '../src/security/mask.js';
 import { passwordPolicyErrors } from '../src/security/passwords.js';
 import { dbIdentFor, instanceDir } from '../src/services/instances.js';
-import { assertSafeArchiveEntries, assertSafeArchiveLinks, assertSafeSqlDump } from '../src/services/backups.js';
+import { assertSafeArchiveEntries, assertSafeArchiveLinks, assertSafeSqlDump, backupExcludes } from '../src/services/backups.js';
 import { clientKey } from '../src/http/rateLimit.js';
 import { gitCheckout } from '../src/system/git.js';
 import { PROVIDERS, PROVIDER_IDS } from '../src/providers/index.js';
 import type { Request } from 'express';
+import { openDb } from '../src/db.js';
+import { AuditLog } from '../src/audit.js';
+import { backupInfo, createRecipient, openBackup, sealBackup } from '../src/security/fleetBackup.js';
 
 const TOKEN = `123456789:${'A'.repeat(35)}`;
 const valid = { slug: 'demo-bot', provider: 'mirza', domain: 'bot.example.com', bot_token: TOKEN, admin_telegram_id: '42' };
@@ -108,6 +111,9 @@ describe('RBAC', () => {
     expect(can('Support', 'instances.delete')).toBe(false);
     expect(can('Admin', 'admins.manage')).toBe(false);
     expect(can('Owner', 'admins.manage')).toBe(true);
+    // Backup destination and recovery key decide where copies of the master key go: Owner only.
+    expect(can('Admin', 'settings.manage')).toBe(false);
+    expect(can('Owner', 'settings.manage')).toBe(true);
     expect(permissionsFor('Viewer')).toEqual(['instances.read', 'backups.read']);
   });
 });
@@ -163,6 +169,66 @@ describe('upstream pinning', () => {
       await expect(gitCheckout('https://example.invalid/x.git', ref, '/nonexistent')).rejects.toThrow(/invalid pinned commit/);
     },
   );
+});
+
+describe('service bots', () => {
+  it('requires and validates the Telegram API credentials', () => {
+    const pasar = { ...valid, provider: 'pasarguard' };
+    expect(createInstanceSchema.safeParse(pasar).success).toBe(false);
+    expect(createInstanceSchema.safeParse({ ...pasar, api_id: '12345', api_hash: 'a'.repeat(32) }).success).toBe(true);
+    expect(createInstanceSchema.safeParse({ ...pasar, api_id: '1; id', api_hash: 'a'.repeat(32) }).success).toBe(false);
+    expect(createInstanceSchema.safeParse({ ...pasar, api_id: '12345', api_hash: `${'a'.repeat(31)}$` }).success).toBe(false);
+  });
+
+  it('masks database URL passwords and API hashes in errors', () => {
+    const text = 'connect mysql+asyncmy://fp_demo:S3cretPass@localhost/fp_demo failed; API_HASH=0123456789abcdef0123456789abcdef';
+    expect(maskSecrets(text)).not.toContain('S3cretPass');
+    expect(maskSecrets(text)).not.toContain('0123456789abcdef0123456789abcdef');
+  });
+
+  it('keeps virtualenvs and package caches out of backups', () => {
+    expect(backupExcludes('demo')).toEqual([
+      '--exclude=demo/.venv',
+      '--exclude=demo/.cache',
+      '--exclude=demo/frontend/node_modules',
+      '--exclude=demo/data/redis/redis.sock',
+    ]);
+  });
+});
+
+describe('encrypted backups (.fleet)', () => {
+  const recipient = createRecipient('correct horse battery staple');
+  const meta = { created_at: '2026-10-03T00:00:00.000Z', host: 'vps-1', version: '0.4.0' };
+  const plain = Buffer.from('control-plane archive bytes');
+
+  it('round-trips with the passphrase and nothing else', () => {
+    const file = sealBackup(plain, recipient, meta);
+    expect(file.includes(plain)).toBe(false);
+    expect(backupInfo(file)).toEqual(meta);
+    expect(openBackup(file, 'correct horse battery staple').plain.equals(plain)).toBe(true);
+  });
+
+  it('refuses a wrong passphrase, tampering and weak passphrases', () => {
+    const file = sealBackup(plain, recipient, meta);
+    expect(() => openBackup(file, 'correct horse battery stapler')).toThrow(/Wrong recovery passphrase/);
+    const tampered = Buffer.from(file);
+    tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 1;
+    expect(() => openBackup(tampered, 'correct horse battery staple')).toThrow(/damaged or was modified/);
+    // The header (host, version, keys) is authenticated too.
+    const relabeled = Buffer.from(file.toString('latin1').replace('vps-1', 'vps-2'), 'latin1');
+    expect(() => openBackup(relabeled, 'correct horse battery staple')).toThrow();
+    expect(() => createRecipient('short')).toThrow();
+    expect(() => openBackup(Buffer.from('not a backup'), 'x')).toThrow(/Not a FleetPanel backup/);
+  });
+});
+
+describe('audit log', () => {
+  it('masks secrets in metadata and still lists entries whose masked JSON is no longer valid', () => {
+    const audit = new AuditLog(openDb(':memory:'));
+    audit.write({ actor: 'cli', action: 'TEST', resource: 'x', status: 'SUCCESS', metadata: { api_hash: '0123456789abcdef0123456789abcdef' } });
+    const [entry] = audit.list(10);
+    expect(JSON.stringify(entry?.metadata)).not.toContain('0123456789abcdef');
+  });
 });
 
 describe('rate-limit client keys', () => {

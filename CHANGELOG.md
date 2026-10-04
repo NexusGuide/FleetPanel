@@ -1,5 +1,72 @@
 # Changelog
 
+## v0.4.1 (dev channel)
+
+### Added
+- **Encrypted Telegram backups of the panel** (*Settings → Telegram backup*, Owner only): the panel database
+  and master key as an encrypted `.fleet` file, sent to a chat, group, channel or forum topic every hour,
+  6 hours or day, only when something changed and at least daily. *Download* gives a fresh file.
+  Encryption: X25519 + AES-256-GCM; the private key is protected by a recovery passphrase (scrypt) that the
+  server never stores, so neither the chat nor a compromised server can open the backups.
+- `sudo fleetpanel restore FILE.fleet` restores such a backup (asks for the passphrase). Bots whose files
+  are missing on the server are then marked *"not installed on this server"* for **Repair**.
+- **Import database** in a bot's details: replace its database with one of the bot's own backups
+  (`.sql`, `.sql.gz` or a `.zip` with one `.sql`, up to 512 MB). A safety backup is taken first; the dump
+  is checked (no mysql client commands) and rewritten (no `CREATE DATABASE`/`USE`/`DEFINER`) and imported
+  as the bot's own database user; FleetPanel's schema, webhook secret and webhook are reapplied.
+- [Disaster recovery guide](docs/backup.md).
+
+### Changed
+- New permission `settings.manage` (Owner only).
+- The panel's nginx site accepts large uploads on the database-import path only (`fleetpanel update`
+  adds it to existing installs and keeps the old file if `nginx -t` rejects the change).
+
+## v0.4.0-beta.1 (dev channel)
+
+Test build: follow it with `sudo fleetpanel channel dev && sudo fleetpanel update`. It moves to the stable
+`main` channel as v0.4.0 once testers have had a go at it.
+
+### Added
+- **PasarguardBot** ([AmirKenzo/PasarguardBot](https://github.com/AmirKenzo/PasarguardBot) `v2.1.4`), the
+  first Python bot. It runs as its own sandboxed systemd service (`fleetpanel-bot-<slug>`) with its own
+  Redis on a private Unix socket, behind nginx with TLS. The create wizard asks for the Telegram API id
+  and hash it needs (my.telegram.org). The first one on a server installs a pinned, checksum-verified
+  Python runtime (uv `0.11.31`, Python 3.14, bun `1.4.2`) and Redis.
+- `fleetpanel logs SLUG` shows a Python bot's log; `fleetpanel doctor` checks that running Python bots'
+  services are active.
+- Installing a Python bot only succeeds once its web server answers and its Telegram client has not
+  failed; otherwise the panel shows the bot's error (for example a wrong API id/hash).
+- Menu item 9 (*Version / update channel*) lets you pick the channel from a list (stable `main`, test
+  builds on `dev`, or one released version) and update right away, instead of typing a ref.
+- `fleetpanel update` warns before restarting the panel while a bot is being installed or deleted, and
+  bot install steps are the first to go if memory runs out, never the panel or other bots.
+
+### Security
+- Reviewed PasarguardBot `v2.1.4` before pinning it. FleetPanel works around what it can: the bot's web
+  server is forced onto 127.0.0.1 (upstream binds 0.0.0.0, which would expose its API without TLS) and
+  provisioning stops it if it listens elsewhere; its API documentation is hidden; it runs from a separate
+  working directory; its secrets live in a root-only environment file with allowlisted keys.
+- Provisioning errors and stored `last_error` texts mask database URL passwords and API hashes, as well
+  as bot tokens.
+
+### Changed
+- Backups leave out virtualenvs, package caches and Redis sockets; restoring a Python bot rebuilds its
+  virtualenv from `uv.lock`.
+
+### Fixed
+- The "open" buttons in the instance list and details opened the site root, which for MirzaBot and Faoxima
+  is the Telegram webhook (nginx answers 403 without the secret). They now open the bot's own web panel
+  (`/panel/`; PasarguardBot: `/webapp/`), shown as its own *Web panel* row in the details.
+- The audit log page failed (500) when secret masking had turned a stored entry into invalid JSON; such an
+  entry is now shown as text.
+- `fleetpanel update` kept every pre-update database snapshot forever; only the three newest are kept.
+- Shorter, clearer CLI output: `update` shows the build log only when the build fails, `version` is one line,
+  and the menu's channel picker no longer repeats itself. The panel's install hints no longer list
+  PHP-only steps for Python bots.
+
+### Upgrading
+`sudo fleetpanel update`. Existing MirzaBot and Faoxima bots are not changed.
+
 ## v0.3.3
 
 ### Security

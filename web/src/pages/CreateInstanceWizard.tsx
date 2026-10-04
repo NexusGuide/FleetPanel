@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, Eye, EyeOff, Layers } from 'lucide-react';
 import {
+  API_HASH_RE,
+  API_ID_RE,
   BOT_TOKEN_RE,
   DOMAIN_RE,
   SLUG_RE,
@@ -9,6 +11,7 @@ import {
   type CreateInstanceInput,
   type Instance,
   type InstanceCheck,
+  type Provider,
 } from '../api';
 import { Button, ErrorBanner, Field, Input, Modal, Notice, Spinner, cx, errorText, useResource } from '../components/ui';
 
@@ -25,8 +28,15 @@ function slugify(value: string): string {
     .replace(/-+$/, '');
 }
 
-function validate(form: CreateInstanceInput): Partial<Record<keyof CreateInstanceInput, string>> {
+function validate(form: CreateInstanceInput, provider?: Provider): Partial<Record<keyof CreateInstanceInput, string>> {
   const errors: Partial<Record<keyof CreateInstanceInput, string>> = {};
+  const needs = provider?.extra_fields ?? [];
+  if (needs.includes('api_id') && !API_ID_RE.test((form.api_id ?? '').trim())) {
+    errors.api_id = 'The numeric App api_id from my.telegram.org → API development tools.';
+  }
+  if (needs.includes('api_hash') && !API_HASH_RE.test((form.api_hash ?? '').trim().toLowerCase())) {
+    errors.api_hash = 'The 32-character App api_hash from my.telegram.org.';
+  }
   if (!SLUG_RE.test(form.slug)) {
     errors.slug = '3–29 characters: lowercase letters, digits and hyphens; starts with a letter, no trailing hyphen.';
   }
@@ -51,9 +61,11 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
   const [conflicts, setConflicts] = useState<InstanceCheck['conflicts']>({});
   const [botUsername, setBotUsername] = useState<string | null>(null);
 
-  const errors = useMemo(() => validate(form), [form]);
-  const detailsValid = !errors.slug && !errors.domain && !errors.bot_token && !errors.admin_telegram_id;
-  const providerName = providers.data?.find((p) => p.id === form.provider)?.name ?? form.provider;
+  const provider = providers.data?.find((p) => p.id === form.provider);
+  const needs = provider?.extra_fields ?? [];
+  const errors = useMemo(() => validate(form, provider), [form, provider]);
+  const detailsValid = Object.values(errors).every((e) => !e);
+  const providerName = provider?.name ?? form.provider;
 
   const set = (key: keyof CreateInstanceInput, value: string) => {
     setForm((f) => {
@@ -76,14 +88,18 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
     (touched[key] ? errors[key] : undefined) ?? conflicts[key as keyof typeof conflicts];
 
   const normalized = (): CreateInstanceInput => ({
-    ...form,
+    slug: form.slug,
+    provider: form.provider,
     domain: form.domain.trim().toLowerCase(),
     bot_token: form.bot_token.trim(),
     admin_telegram_id: form.admin_telegram_id.trim(),
+    // Only the fields this provider uses (the API refuses unknown ones).
+    ...(needs.includes('api_id') ? { api_id: (form.api_id ?? '').trim() } : {}),
+    ...(needs.includes('api_hash') ? { api_hash: (form.api_hash ?? '').trim().toLowerCase() } : {}),
   });
 
   const review = async () => {
-    setTouched({ slug: true, domain: true, bot_token: true, admin_telegram_id: true });
+    setTouched({ slug: true, domain: true, bot_token: true, admin_telegram_id: true, api_id: true, api_hash: true });
     if (!detailsValid) return;
     setChecking(true);
     setCheckError(null);
@@ -181,6 +197,9 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
                 <span className="block text-[11px] text-slate-500 font-mono mt-0.5">
                   {p.version} · {p.commit.slice(0, 12)}
                 </span>
+                {p.runtime === 'python' && (
+                  <span className="block text-[11px] text-amber-300/80 mt-1">Python service · uses ~300 MB RAM · needs an API id/hash</span>
+                )}
               </button>
             ))}
           </div>
@@ -253,6 +272,43 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
               autoComplete="off"
             />
           </Field>
+          {needs.includes('api_id') && (
+            <Field
+              label="Telegram API ID"
+              hint={
+                <>
+                  From <span className="font-mono">my.telegram.org</span> → API development tools (any app name).
+                </>
+              }
+              error={fieldError('api_id')}
+            >
+              <Input
+                value={form.api_id ?? ''}
+                onChange={(e) => set('api_id', e.target.value.replace(/\s/g, ''))}
+                onBlur={() => setTouched((t) => ({ ...t, api_id: true }))}
+                placeholder="12345678"
+                inputMode="numeric"
+                className="font-mono"
+                invalid={!!fieldError('api_id')}
+                autoComplete="off"
+              />
+            </Field>
+          )}
+          {needs.includes('api_hash') && (
+            <Field label="Telegram API hash" hint="Stored encrypted, like the bot token." error={fieldError('api_hash')}>
+              <Input
+                type={showToken ? 'text' : 'password'}
+                value={form.api_hash ?? ''}
+                onChange={(e) => set('api_hash', e.target.value.trim())}
+                onBlur={() => setTouched((t) => ({ ...t, api_hash: true }))}
+                placeholder="0123456789abcdef0123456789abcdef"
+                className="font-mono"
+                invalid={!!fieldError('api_hash')}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </Field>
+          )}
           {checkError && <ErrorBanner error={checkError} />}
         </div>
       )}
@@ -267,6 +323,7 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
               ['Telegram bot', botUsername ? `@${botUsername}` : '—'],
               ['Bot token', `${form.bot_token.trim().split(':')[0]}:••••••`],
               ['Admin Telegram ID', form.admin_telegram_id.trim()],
+              ...(needs.includes('api_id') ? [['Telegram API ID', (form.api_id ?? '').trim()]] : []),
               ['Database', `fp_${form.slug.replace(/-/g, '_')}`],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-4 px-3 py-2">
@@ -276,10 +333,11 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
             ))}
           </dl>
           <Notice tone="warn">
-            Before you continue, make sure <b className="font-mono">{form.domain.trim().toLowerCase()}</b> resolves to this
-            server and port 80 is open. Let's Encrypt and Telegram both need to reach it over the internet, otherwise
-            the install stops with an error (you can fix DNS and press Reprovision).
+            <b className="font-mono">{form.domain.trim().toLowerCase()}</b> must point to this server and port 80 must be open.
           </Notice>
+          {provider?.runtime === 'python' && (
+            <Notice tone="info">The first {providerName} on this server also installs Python and takes a few minutes longer.</Notice>
+          )}
           {submitError && <ErrorBanner error={submitError} />}
         </div>
       )}

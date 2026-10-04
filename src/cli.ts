@@ -17,6 +17,7 @@ import { gitCheckout } from './system/git.js';
 import { systemToolchain } from './system/toolchain.js';
 import { run } from './system/exec.js';
 import { errorMessage } from './errors.js';
+import { backupInfo, openBackup } from './security/fleetBackup.js';
 
 // Run by bin/fleetpanel as the fleetpanel service user (never as root).
 const USAGE = `Usage: node dist/cli.js <command>
@@ -31,6 +32,7 @@ const USAGE = `Usage: node dist/cli.js <command>
   restore-instance <backup-id>       restore an instance backup (a safety backup is taken first)
   backup-control-plane <dir>         archive the control-plane database and master key into <dir>
   delete-webhooks                    unregister every instance's Telegram webhook
+  decrypt-backup <in.fleet> <out>    decrypt an encrypted backup (asks for the recovery passphrase)
 
 Passwords are read from stdin (one line) or prompted for on a terminal.
 `;
@@ -279,6 +281,17 @@ async function main(argv: string[]): Promise<void> {
       } finally {
         db.close();
       }
+      return;
+    }
+    case 'decrypt-backup': {
+      const [input, output] = rest;
+      if (!input || !output) fail('usage: decrypt-backup <in.fleet> <out.tar.gz>', 2);
+      const file = fs.readFileSync(input);
+      const info = backupInfo(file);
+      process.stderr.write(`Backup of ${info.host}, FleetPanel v${info.version}, created ${info.created_at}\n`);
+      const passphrase = process.stdin.isTTY ? await promptHidden('Recovery passphrase: ') : await readLineFromPipe();
+      const { plain } = openBackup(file, passphrase);
+      fs.writeFileSync(output, plain, { mode: 0o600 });
       return;
     }
     default:

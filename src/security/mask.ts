@@ -3,7 +3,9 @@ const PATTERNS: Array<[RegExp, string]> = [
   [/\b(\d{5,15}):[A-Za-z0-9_-]{30,64}\b/g, '$1:***'],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]'],
   // key=value / key: value / "key":"value" style secrets
-  [/((?:password|passwd|secret|token|api_?key)["']?\s*[:=]\s*)["']?[^"'\s,;&}]+["']?/gi, '$1***'],
+  [/((?:password|passwd|secret|token|api_?key|api_?hash)["']?\s*[:=]\s*)["']?[^"'\s,;&}]+["']?/gi, '$1***'],
+  // Credentials in connection URLs: scheme://user:password@host
+  [/(\b[a-z][a-z0-9+.-]*:\/\/[^:/\s@]+:)[^@\s/]+@/gi, '$1***@'],
 ];
 
 export function maskSecrets(text: string): string {

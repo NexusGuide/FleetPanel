@@ -60,6 +60,16 @@ export class AuditLog {
         ? this.db.prepare('SELECT * FROM audit_logs WHERE id < ? ORDER BY id DESC LIMIT ?').all(beforeId, limit)
         : this.db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?').all(limit)
     ) as Array<Omit<AuditRecord, 'metadata'> & { metadata: string | null }>;
-    return rows.map((row) => ({ ...row, metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null }));
+    return rows.map((row) => ({ ...row, metadata: parseMetadata(row.metadata) }));
+  }
+}
+
+/** Metadata is masked after serialisation; if masking ever broke the JSON, show it as text instead of failing the page. */
+function parseMetadata(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return { raw };
   }
 }

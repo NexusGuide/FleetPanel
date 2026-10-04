@@ -4,9 +4,10 @@
 
 ### A secure control plane for hosting many Telegram bots on one Linux server
 
-Deploy and run isolated **MirzaBot** and **Faoxima** instances on a single Ubuntu/Debian VPS: each bot gets
-its own Linux user, PHP-FPM pool, MySQL database, nginx site and Let's Encrypt certificate, managed from a
-web panel and a CLI.
+Deploy and run isolated **MirzaBot**, **Faoxima** and **PasarguardBot** instances on a single Ubuntu/Debian
+VPS: each bot gets its own Linux user, MySQL database, nginx site and Let's Encrypt certificate (plus a
+PHP-FPM pool, or a sandboxed systemd service with its own Redis for Python bots), managed from a web panel
+and a CLI.
 
 [![CI](https://github.com/NexusGuide/FleetPanel/actions/workflows/ci.yml/badge.svg)](https://github.com/NexusGuide/FleetPanel/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
@@ -14,11 +15,14 @@ web panel and a CLI.
 [![Security: Argon2id + AES-256-GCM](https://img.shields.io/badge/Security-Argon2id%20%2B%20AES--256--GCM-red?style=flat-square)](SECURITY.md)
 [![Node.js 20.19+](https://img.shields.io/badge/Node.js-20.19%2B-green?style=flat-square&logo=node.js)](https://nodejs.org)
 [![PHP 8.2+](https://img.shields.io/badge/PHP-8.2%2B-777bb4?style=flat-square&logo=php)](https://www.php.net)
+[![Telegram group](https://img.shields.io/badge/Telegram-group-26A5E4?style=flat-square&logo=telegram)](https://t.me/FleetPanelGroup)
+
+**English** · [فارسی](README.fa.md)
 
 </div>
 
-> **Status: v0.3 (pre-release).** Web panel, provisioning, CLI and updates are tested on a real
-> Ubuntu 24.04 server with MirzaBot and Faoxima. See the [changelog](CHANGELOG.md) and the [roadmap](#roadmap).
+> **Status: v0.4 (pre-release).** Web panel, provisioning, CLI and updates are tested on a real
+> Ubuntu 24.04 server with MirzaBot and Faoxima. PasarguardBot support is new in v0.4.0. See the [changelog](CHANGELOG.md) and the [roadmap](#roadmap).
 
 ---
 
@@ -55,13 +59,21 @@ Every number and state in the panel comes from the server; nothing is simulated.
 - **Dashboard:** instance counts, server CPU load, memory and disk, recent activity
 - **Instances:** a guided create wizard, start, stop, backup, **repair/reprovision**, delete (with a
   pre-delete backup). If an install fails, the panel shows the failing step and the real error.
-- **Backups:** list, restore (a safety backup is taken first), delete
+- **Backups:** list, restore (a safety backup is taken first), delete; **import a bot's own database backup**
+- **Settings:** encrypted panel backups to Telegram on a schedule ([disaster recovery](docs/backup.md))
 - **Administrators** (Owner only), **audit log** and **my account** (password, sessions)
 
-Creating a bot: point its domain's DNS at the server, then *New instance* → choose MirzaBot or Faoxima →
-domain, bot token from @BotFather and your numeric Telegram id. FleetPanel then downloads the bot, writes its
-config, runs `composer install` and the bot's own schema script, creates the database, the PHP pool and
-nginx site, issues the certificate and registers the webhook.
+Creating a bot: point its domain's DNS at the server, then *New instance* → choose MirzaBot, Faoxima or
+PasarguardBot → domain, bot token from @BotFather and your numeric Telegram id (PasarguardBot also needs an
+API id and hash from [my.telegram.org](https://my.telegram.org)). FleetPanel then downloads the bot's pinned
+version, writes its config, installs its dependencies and runs its schema setup as the bot's own user,
+creates the database and the nginx site, issues the certificate and connects the bot to Telegram.
+
+| Bot | Runs as | Notes |
+| :--- | :--- | :--- |
+| MirzaBot | PHP-FPM pool + Telegram webhook | Panels: Marzban, X-UI, S-UI, Hiddify, ... |
+| Faoxima | PHP-FPM pool + Telegram webhook | Panels: Marzban, X-UI |
+| PasarguardBot | Python service (systemd) + its own Redis | Panel: PasarGuard · ~300 MB RAM per bot |
 
 ---
 
@@ -87,7 +99,7 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 
 ```text
 ╭──────────────────────────────────────────╮
-│ FleetPanel v0.3.3  ·  channel main       │
+│ FleetPanel v0.4.0  ·  channel main       │
 ╰──────────────────────────────────────────╯
   Panel: ● running
 
@@ -106,10 +118,12 @@ Full details: [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md
 | `fleetpanel doctor` | Checks the whole host and reports `[PASS]` / `[WARN]` / `[FAIL]` |
 | `fleetpanel start` / `stop` / `restart` | Control the panel service (bots keep running) |
 | `fleetpanel logs [N] [-f]` | Last N log lines (secrets are masked); `-f` follows |
+| `fleetpanel logs SLUG [N] [-f]` | Log of a Python bot (PasarguardBot) |
 | `fleetpanel instances` | List bot instances with provider, domain, bot and status |
 | `fleetpanel backups [SLUG]` | List instance backups and control-plane backups |
 | `fleetpanel backup` | Back up the control plane: panel database **and master key** |
 | `fleetpanel backup SLUG` | Back up one instance (files + database dump) |
+| `fleetpanel restore FILE.fleet` | Restore an encrypted panel backup (e.g. from Telegram; asks for the passphrase) |
 | `fleetpanel restore FILE.tar.gz` | Restore a control-plane backup (safety backup first) |
 | `fleetpanel restore BACKUP_ID` | Restore an instance backup (safety backup first) |
 | `fleetpanel admins` / `create-admin` / `reset-password` | Manage administrators from the server |
@@ -123,10 +137,10 @@ Full reference: [docs/cli.md](docs/cli.md).
 ### 🩺 System doctor
 
 ```text
-FleetPanel doctor — v0.3.3, channel main
+FleetPanel doctor — v0.4.0, channel main
 
   [PASS] Panel service is running
-  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.3.3"})
+  [PASS] API answers on 127.0.0.1:3000 ({"status":"ok","version":"0.4.0"})
   [PASS] nginx configuration is valid
   [PASS] php-fpm 8.3 configuration is valid
   [PASS] MySQL/MariaDB is reachable
@@ -165,6 +179,19 @@ Summary: 15 passed, 1 warnings, 0 failed
 
 Bots are never stopped by a panel update.
 
+## 🧪 Release channels
+
+| Channel | What you get | Switch |
+| :--- | :--- | :--- |
+| `main` | Stable releases (default) | `sudo fleetpanel channel main && sudo fleetpanel update` |
+| `dev` | Test builds: new features first, may have bugs | `sudo fleetpanel channel dev && sudo fleetpanel update` |
+| `vX.Y.Z` | One fixed release, never moves | `sudo fleetpanel channel v0.3.3 && sudo fleetpanel update` |
+
+New features land on `dev` first and move to `main` once testers have found and fixed their bugs.
+Found one? Please open an [issue](https://github.com/NexusGuide/FleetPanel/issues) or post in the
+[Telegram group](https://t.me/FleetPanelGroup), with the panel's error and `sudo fleetpanel doctor` output. To install a test build directly:
+`curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/dev/install.sh | sudo FLEETPANEL_REF=dev bash`
+
 ## 🗑️ Uninstall
 
 `sudo fleetpanel uninstall` offers two modes:
@@ -187,7 +214,7 @@ bash -n install.sh bin/fleetpanel deploy/fleetpanel-helper
 ```
 
 Tests cover authentication, CSRF and origin checks, RBAC, injection attempts, encryption at rest, the
-provisioning steps of both providers (with the system calls stubbed), audit logging and backups.
+provisioning steps of every provider (with the system calls stubbed), audit logging and backups.
 CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
@@ -195,8 +222,7 @@ CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](
 - Cron jobs for the bots' scheduled tasks (expiry reminders, built-in bot backups)
 - Restoring a backup into a deleted instance
 - Per-instance version pinning and upgrades
-- PasarGuard provider
-- Scheduled backups and off-site upload
+- Off-site copies of the bots' own data
 
 ## 📖 Documentation
 
@@ -206,9 +232,15 @@ CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](
 - [CLI reference](docs/cli.md)
 - [REST API](docs/api.md)
 - [Bot providers](docs/providers.md)
+- [Backups and disaster recovery](docs/backup.md)
 - [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
+
+## 💬 Community
+
+Questions, ideas and test reports: [Telegram group](https://t.me/FleetPanelGroup).
 
 ## 📄 License
 
-FleetPanel is open-source software licensed under the [MIT License](LICENSE). MirzaBot and Faoxima are
-separate projects with their own licenses; FleetPanel downloads them from their repositories at install time.
+FleetPanel is open-source software licensed under the [MIT License](LICENSE). MirzaBot, Faoxima and
+PasarguardBot are separate projects with their own licenses (PasarguardBot: AGPL-3.0); FleetPanel downloads
+them unmodified from their repositories at install time.
