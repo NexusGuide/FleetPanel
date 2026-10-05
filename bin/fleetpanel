@@ -352,7 +352,8 @@ cmd_doctor() {
   if out="$(nginx -t 2>&1)"; then pass "nginx configuration is valid"; else fail "nginx configuration is invalid: $(printf '%s' "$out" | grep -E 'emerg|error' | tail -n 1)"; fi
   # nginx only warns about duplicate server names, then serves the domain from whichever site sorts first.
   local dup
-  dup="$(printf '%s' "$out" | grep -o 'conflicting server name "[^"]*"' | cut -d'"' -f2 | sort -u | tr '\n' ' ')"
+  # || true: no match is the normal case, and set -e would otherwise end doctor right here.
+  dup="$(printf '%s' "$out" | grep -o 'conflicting server name "[^"]*"' | cut -d'"' -f2 | sort -u | tr '\n' ' ' || true)"
   if [[ -n $dup ]]; then
     warn "Domains served by more than one nginx site (requests may reach the wrong one): ${dup% } — check: grep -l <domain> /etc/nginx/sites-enabled/*"
   fi
