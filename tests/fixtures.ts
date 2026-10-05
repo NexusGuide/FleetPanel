@@ -75,6 +75,13 @@ export function fakeRunner(calls: ToolCalls, instancesDir: () => string) {
     async prepareRuntime(): Promise<void> {
       calls.service.push('runtime');
     },
+    /** Same effect as the helper's instance-upgrade-sync (which runs as the bot's user). */
+    async upgradeSync(slug: string, staging: string, removed: string[]): Promise<void> {
+      calls.service.push(`${slug}:upgrade-sync`);
+      const dir = path.join(instancesDir(), slug);
+      for (const rel of removed) fs.rmSync(path.join(dir, rel), { force: true });
+      fs.cpSync(staging, dir, { recursive: true });
+    },
     async refreshInstance(slug: string, cronScript: string): Promise<void> {
       calls.service.push(`${slug}:cron:${cronScript}`);
     },

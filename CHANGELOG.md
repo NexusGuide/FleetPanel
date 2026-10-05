@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.4.3 (dev channel)
+
+### Added
+- **Bot updates from the panel.** The panel checks the bots' projects every 6 hours (or on *Check for bot
+  updates*) and announces newer versions, which are installed only after they are reviewed and pinned in a
+  FleetPanel release. Bots on an older reviewed version are marked *update*: **Update** one bot, or
+  **Update all** of a type; updates run one at a time.
+- An update keeps the bot's database and the files it created, unlike Repair: safety backup, staged new
+  version, removed upstream files deleted and new files copied as the bot's own user, then dependencies,
+  schema, webhook and cron jobs reapplied. A failure before the bot is stopped leaves it running and
+  unchanged.
+
+### Changed
+- A bot's last message is shown for running and stopped bots too (e.g. *"Update not applied: …"*).
+
+### Fixed (from a review of v0.4.2–v0.4.3)
+- Starting a PHP bot that was stopped before v0.4.2 now creates its cron timer (it was only created at panel
+  start for running bots); an update of a stopped bot no longer starts its cron timer.
+- Bots installed before FleetPanel recorded versions can be updated too (they were never offered an update).
+- An update no longer fails when the installed commit cannot be fetched any more (e.g. rewritten upstream
+  history); it then copies the new version without deleting files.
+- Staging folders of updates interrupted by a restart are removed at start, and the restart message no longer
+  suggests only Repair (which would replace the bot's files) for a bot that was being updated.
+- Links to new bot versions in the panel must be GitHub pages (they come from GitHub's API answer).
+
 ## v0.4.2 (dev channel)
 
 ### Added

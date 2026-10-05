@@ -59,6 +59,8 @@ Every number and state in the panel comes from the server; nothing is simulated.
 - **Dashboard:** instance counts, server CPU load, memory and disk, recent activity
 - **Instances:** a guided create wizard, start, stop, backup, **repair/reprovision**, delete (with a
   pre-delete backup). If an install fails, the panel shows the failing step and the real error.
+- **Bot updates:** new versions of the bots are announced; reviewed ones are installed from the panel,
+  one bot or all of a type at once, keeping each bot's data
 - **Backups:** list, restore (a safety backup is taken first), delete; **import a bot's own database backup**
 - **Settings:** encrypted panel backups to Telegram on a schedule ([disaster recovery](docs/backup.md))
 - **Administrators** (Owner only), **audit log** and **my account** (password, sessions)

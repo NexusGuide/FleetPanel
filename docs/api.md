@@ -72,6 +72,10 @@ bot: `409 slug_in_use` (same name, case-insensitive), `409 domain_in_use`, or `4
 Telegram bot, even with a new token). The response is `202` with `status: "provisioning"`. Poll
 `GET /api/instances/:id` until `status` is `running`, or `error` with the failing step in `last_error`.
 
+`POST /api/instances/:id/upgrade` (`instances.create`) updates a bot to the version this FleetPanel pins, keeping
+its data; `202`, queued, one bot at a time. `409 up_to_date` when it already runs it. `GET /api/system/providers`
+includes each provider's `upstream` status; `POST /api/system/providers/check` refreshes it.
+
 `POST /api/instances/check` takes the same body, changes nothing and returns
 `{ "bot_username": "…", "conflicts": { "slug"?: "…", "domain"?: "…", "bot_token"?: "…" } }`; the create
 wizard calls it before the review step.

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ApiError, api, type Backup, type Instance } from '../api';
 import { errorText, useConfirm, useToast } from '../components/ui';
 
-export type ActionName = 'start' | 'stop' | 'backup' | 'reprovision' | 'delete';
+export type ActionName = 'start' | 'stop' | 'backup' | 'reprovision' | 'delete' | 'upgrade';
 
 /**
  * Every lifecycle action for an instance, with confirmation and honest feedback:
@@ -70,6 +70,36 @@ export function useInstanceActions(opts: {
       opts.onBackup?.(created);
       toast.success(`Backup of ${inst.slug} created.`);
     }
+  };
+
+  /** Updates one bot, or several one after another (the server queues them). */
+  const upgrade = async (insts: Instance[], version: string) => {
+    if (insts.length === 0) return;
+    const names = insts.map((i) => i.slug).join(', ');
+    const ok = await confirm({
+      title: insts.length === 1 ? `Update ${names}?` : `Update ${insts.length} bots?`,
+      body: (
+        <>
+          <p>
+            <b>{names}</b> will be updated to <b>{version}</b>, a version reviewed
+            for FleetPanel. Its database and the files it created (uploads, its own backups) are kept; a safety backup is
+            taken first.
+          </p>
+          <p className="text-slate-400">Each bot is offline for a minute or two while it updates. Bots update one at a time.</p>
+        </>
+      ),
+      confirmLabel: insts.length === 1 ? 'Update' : `Update ${insts.length} bots`,
+    });
+    if (!ok) return;
+    let started = 0;
+    for (const inst of insts) {
+      const updated = await run(inst, 'upgrade', () => api.upgradeInstance(inst.id));
+      if (updated) {
+        opts.onChanged(updated);
+        started += 1;
+      }
+    }
+    if (started > 0) toast.success(started === 1 ? `Updating ${insts[0]?.slug}…` : `Updating ${started} bots, one at a time…`);
   };
 
   const reprovision = async (inst: Instance) => {
@@ -161,5 +191,5 @@ export function useInstanceActions(opts: {
   const isPending = (id: number, action?: ActionName) =>
     pending !== null && pending.id === id && (action === undefined || pending.action === action);
 
-  return { start, stop, backup, reprovision, remove, isPending };
+  return { start, stop, backup, reprovision, remove, upgrade, isPending };
 }

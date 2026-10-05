@@ -1,4 +1,12 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
+
+function readdirSafe(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { DB } from '../db.js';
@@ -49,6 +57,7 @@ export interface InstanceRow {
 export type InstanceConflicts = Partial<Record<'slug' | 'domain' | 'bot_token', string>>;
 
 export type GitCheckout = (repoUrl: string, commit: string, dest: string) => Promise<void>;
+export type GitRemovedFiles = (dir: string, oldCommit: string, newCommit: string) => Promise<string[]>;
 
 export function dbIdentFor(slug: string): string {
   if (!SLUG_RE.test(slug)) throw new Error('invalid slug');
@@ -72,6 +81,8 @@ export interface InstanceServiceDeps {
   telegram: TelegramClient;
   backups: BackupService;
   git: GitCheckout;
+  /** Lists the files the upstream removed between two commits (omitted: none are removed). */
+  gitRemovedFiles?: GitRemovedFiles;
   tools: Toolchain;
   instancesDir: string;
 }
@@ -161,12 +172,16 @@ export class InstanceService {
     const result = this.d.db
       .prepare(
         `UPDATE instances SET status = 'error',
-           last_error = 'Interrupted by a control-plane restart. Reprovision or delete this instance.',
+           last_error = 'Interrupted by a control-plane restart. If it was being updated, restore its latest safety backup (Backups); otherwise Reprovision or delete it.',
            updated_at = ${TIMESTAMP}
          WHERE status IN ('provisioning', 'deleting')`,
       )
       .run();
     if (result.changes > 0) log.warn(`Flagged ${result.changes} interrupted instance(s) as error`);
+    // Staging folders of updates cut short by the restart.
+    for (const name of readdirSafe(this.d.instancesDir)) {
+      if (name.startsWith('.upgrade-')) rmSync(path.join(this.d.instancesDir, name), { recursive: true, force: true });
+    }
   }
 
   /**
@@ -265,6 +280,140 @@ export class InstanceService {
 
     this.provisionInBackground(id, actor, false);
     return this.get(id);
+  }
+
+  /** True when this bot runs an older reviewed version than the one this FleetPanel pins. */
+  isOutdated(inst: InstanceRow): boolean {
+    // null: installed before FleetPanel recorded versions (v0.3.3), so not known to be current.
+    return inst.source_commit !== PROVIDERS[inst.provider].commit;
+  }
+
+  /** Upgrades run one after another: each one builds, installs dependencies and restarts a bot. */
+  private upgradeQueue: Promise<void> = Promise.resolve();
+
+  /**
+   * Updates an installed bot to the version this FleetPanel pins, keeping its database and the files
+   * it created (unlike Repair, which reinstalls from scratch). Queued; returns immediately.
+   */
+  upgrade(id: number, actor: ActorRef): InstanceRow {
+    const inst = this.get(id);
+    if (inst.status !== 'running' && inst.status !== 'stopped') {
+      throw new HttpError(409, 'instance_not_ready', 'Only installed bots (running or stopped) can be updated. Use Repair to reinstall this one.');
+    }
+    if (!this.isOutdated(inst)) throw new HttpError(409, 'up_to_date', 'This bot already runs the newest reviewed version.');
+    this.lock(inst);
+    const wasRunning = inst.status === 'running';
+    this.setStatus(id, 'provisioning');
+    const job = this.upgradeQueue.then(() => this.performUpgrade(id, actor, wasRunning));
+    this.upgradeQueue = job.catch(() => undefined);
+    void job.finally(() => this.unlock(id));
+    return this.get(id);
+  }
+
+  /** Never throws: the outcome is recorded on the instance row and in the audit log. */
+  private async performUpgrade(id: number, actor: ActorRef, wasRunning: boolean): Promise<void> {
+    const inst = this.get(id);
+    const provider = PROVIDERS[inst.provider];
+    const from = inst.source_commit;
+    let safetyId: string | null = null;
+    let staging: string | null = null;
+    // Until the bot is stopped nothing has changed: a failure before that leaves it as it was.
+    let touched = false;
+    try {
+      const ctx = this.contextFor(inst);
+      safetyId = (await step('Taking a safety backup', () => this.d.backups.create(inst, 'pre-restore', actor))).id;
+      // Next to the instances (same disk); the helper lets only this bot's user read it.
+      staging = await fs.mkdtemp(path.join(this.d.instancesDir, `.upgrade-${inst.slug}-`));
+      const dir = staging;
+      await step(`Downloading ${provider.displayName} ${provider.version}`, () => this.d.git(provider.repoUrl, provider.commit, dir));
+      let removed: string[] = [];
+      if (from && this.d.gitRemovedFiles) {
+        try {
+          removed = await this.d.gitRemovedFiles(dir, from, provider.commit);
+        } catch (err) {
+          // E.g. the installed commit no longer exists upstream: copy the new version without deleting.
+          log.warn(`Could not compare ${inst.slug} with its installed version; no files are removed`, err);
+        }
+      }
+      await fs.rm(path.join(dir, '.git'), { recursive: true, force: true });
+      const shipsVendor = await exists(path.join(dir, 'vendor', 'autoload.php'));
+      await step('Preparing the new version', () => this.prepareStaging(provider, ctx, dir));
+
+      touched = true;
+      await step('Stopping the bot', () => this.d.ops.disableInstance(inst.slug));
+      await step('Installing the new version', () => this.d.ops.upgradeSync(inst.slug, dir, removed));
+      await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));
+      if (provider.runtime === 'python') {
+        await step('Installing Python dependencies (uv sync)', () => this.d.ops.runTask(inst.slug, 'python-deps'));
+        await step('Building the web app', () => this.d.ops.runTask(inst.slug, 'webapp-build'));
+        await step('Updating database tables (alembic)', () => this.d.ops.runTask(inst.slug, 'python-migrate'));
+      } else {
+        if (!shipsVendor && (await exists(path.join(ctx.instanceDir, 'composer.json')))) {
+          await step('Installing PHP dependencies (composer install)', async () => {
+            await this.d.ops.runComposer(inst.slug);
+            await this.d.ops.fixPermissions(inst.slug);
+          });
+        }
+        await this.reapplySettings(inst, provider, ctx);
+        // Only for a running bot: refreshing starts the cron timer. A stopped bot gets it when started.
+        if (wasRunning) await step("Scheduling the bot's cron jobs", () => this.d.ops.refreshInstance(inst.slug, provider.cronScript));
+      }
+      if (wasRunning) {
+        await step('Starting the bot', () => this.d.ops.enableInstance(inst.slug));
+        if (provider.runtime === 'python' && inst.app_port !== null) {
+          const port = inst.app_port;
+          await step('Waiting for the bot', () => this.d.ops.waitForService(inst.slug, port));
+        }
+      }
+      this.d.db.prepare('UPDATE instances SET source_commit = ? WHERE id = ?').run(provider.commit, id);
+      this.setStatus(id, wasRunning ? 'running' : 'stopped');
+      this.d.audit.write({
+        actor,
+        action: 'INSTANCE_UPGRADE',
+        resource: 'instance',
+        resourceId: id,
+        status: 'SUCCESS',
+        metadata: { slug: inst.slug, from, to: provider.commit, version: provider.version, safety_backup_id: safetyId },
+      });
+      log.info(`Instance ${inst.slug} updated to ${provider.displayName} ${provider.version}`);
+    } catch (err) {
+      const message = maskSecrets(errorMessage(err)).slice(0, 800);
+      if (touched) {
+        const hint = safetyId ? ` The previous version is in safety backup ${safetyId} (Backups → Restore).` : '';
+        this.setStatus(id, 'error', `Update failed: ${message}.${hint}`);
+      } else {
+        this.setStatus(id, wasRunning ? 'running' : 'stopped', `Update not applied (the bot was not changed): ${message}.`);
+      }
+      this.d.audit.write({
+        actor,
+        action: 'INSTANCE_UPGRADE',
+        resource: 'instance',
+        resourceId: id,
+        status: 'FAILED',
+        metadata: { slug: inst.slug, from, to: provider.commit, error: message, safety_backup_id: safetyId },
+      });
+      log.error(`Updating ${inst.slug} failed`, err);
+    } finally {
+      if (staging) await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Puts FleetPanel's own files into the staged version before it is copied over the bot, so the
+   * copy (done as the bot's user) also brings the new config and leaves no installer behind.
+   */
+  private async prepareStaging(provider: BotProvider, ctx: ProviderContext, staging: string): Promise<void> {
+    if (provider.runtime === 'python') {
+      for (const rel of SERVICE_DIRS) await fs.mkdir(path.join(staging, rel), { recursive: true });
+      for (const rel of ENV_PLACEHOLDERS) await fs.writeFile(path.join(staging, rel), ENV_PLACEHOLDER_TEXT);
+      for (const rel of provider.workdirFiles) await fs.copyFile(path.join(staging, rel), path.join(staging, 'workdir', rel));
+      return;
+    }
+    const configPath = path.join(staging, provider.configFile);
+    const template = await fs.readFile(configPath, 'utf8');
+    await fs.writeFile(configPath, provider.renderConfig(template, ctx), { mode: 0o600 });
+    await fs.chmod(configPath, 0o600);
+    await fs.rm(path.join(staging, provider.installerDir), { recursive: true, force: true });
   }
 
   reprovision(id: number, actor: ActorRef): InstanceRow {
@@ -496,6 +645,9 @@ export class InstanceService {
     this.lock(inst);
     try {
       await this.d.ops.enableInstance(inst.slug);
+      // A PHP bot stopped before this FleetPanel version has no cron timer yet: create it on start.
+      const provider = PROVIDERS[inst.provider];
+      if (provider.runtime === 'php') await this.d.ops.refreshInstance(inst.slug, provider.cronScript);
       this.setStatus(id, 'running');
       this.d.audit.write({ actor, action: 'INSTANCE_START', resource: 'instance', resourceId: id, status: 'SUCCESS' });
       return this.get(id);

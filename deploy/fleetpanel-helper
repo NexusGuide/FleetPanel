@@ -262,6 +262,43 @@ EOF
   harden_vhost "$slug"
 }
 
+# instance-upgrade-sync SLUG STAGING   (stdin: paths removed upstream, one per line)
+# Upgrades a bot's code in place: deletes the files the upstream project removed, then copies the
+# new version (prepared by the control plane in STAGING) over the instance. Both run as the bot's
+# own user, so a symlink the bot planted in its folder can only redirect writes it could make itself.
+# Files the bot created (uploads, its own backups, state) are not touched.
+cmd_instance_upgrade_sync() {
+  need_args $# 2
+  local slug="$1" staging="$2" user dir list path rc=0
+  check_slug "$slug"
+  user="$(instance_user "$slug")"
+  dir="$(instance_dir "$slug")"
+  require_instance_dir "$dir"
+  id -u "$user" >/dev/null 2>&1 || die "instance user does not exist (run instance-perms first)"
+  [[ $staging =~ ^$INSTANCES_DIR/\.upgrade-$slug-[A-Za-z0-9]{6,12}$ ]] || die "invalid staging directory"
+  [[ -d $staging && ! -L $staging && "$(stat -c %U "$staging")" == "$CONTROL_USER" ]] || die "staging directory missing or not owned by $CONTROL_USER"
+  [[ ! -e $staging/.git ]] || die "staging directory still contains .git"
+
+  list="$(mktemp)"
+  while IFS= read -r path || [[ -n $path ]]; do
+    [[ -z $path ]] && continue
+    # Relative, plain names only: no "..", no absolute paths, nothing in .git.
+    [[ $path =~ ^[A-Za-z0-9_@+-][A-Za-z0-9._@+/-]{0,255}$ && $path != *..* && $path != .git* && $path != */.git* ]] || continue
+    printf '%s\n' "$path" >> "$list"
+  done
+  chown "$user" "$list"
+  # Only this bot may read the staged files (its new config holds its database password).
+  setfacl -R -P -m "u:$user:rX" "$staging"
+  (cd -P -- "$dir" && timeout 900 runuser -u "$user" -- env -i PATH="$PATH" LANG=C.UTF-8 bash -c '
+      while IFS= read -r p; do
+        if [[ -L $p || -f $p ]]; then rm -f -- "$p"; fi
+      done < "$1"
+      cp -R -P --preserve=mode,timestamps -- "$2"/. .
+    ' fleetpanel-upgrade "$list" "$staging" </dev/null) >&2 || rc=$?
+  rm -f -- "$list"
+  [[ $rc -eq 0 ]] || die "copying the new version failed with exit code $rc"
+}
+
 # instance-perms SLUG
 # Bot files belong to the per-instance user; the control plane gets access
 # through an ACL. nginx (www-data) may read files so it can serve the bot's
@@ -936,6 +973,7 @@ main() {
     runtime-python)   cmd_runtime_python "$@" ;;
     instance-env)     cmd_instance_env "$@" ;;
     instance-refresh) cmd_instance_refresh "$@" ;;
+    instance-upgrade-sync) cmd_instance_upgrade_sync "$@" ;;
     service-create)   cmd_service_create "$@" ;;
     service-wait)     cmd_service_wait "$@" ;;
     *) die "unknown command '${cmd}'" ;;

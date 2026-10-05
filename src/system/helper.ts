@@ -23,6 +23,11 @@ export interface PrivilegedOps {
    * a crontab of its own and brings its nginx site up to date. Idempotent.
    */
   refreshInstance(slug: string, cronScript: string): Promise<void>;
+  /**
+   * Upgrades a bot's code in place as the bot's own user: deletes the paths the upstream removed,
+   * then copies the prepared new version from the staging directory. The bot's own files stay.
+   */
+  upgradeSync(slug: string, staging: string, removed: string[]): Promise<void>;
   /** Installs the pinned Python toolchain (uv, Python, bun) and Redis once per server. */
   prepareRuntime(): Promise<void>;
   /** Stores a service bot's environment (KEY=value lines) where only root can read it. */
@@ -55,6 +60,10 @@ export class SudoHelper implements PrivilegedOps {
 
   refreshInstance(slug: string, cronScript: string): Promise<void> {
     return this.call(['instance-refresh', slug, cronScript]);
+  }
+
+  upgradeSync(slug: string, staging: string, removed: string[]): Promise<void> {
+    return this.call(['instance-upgrade-sync', slug, staging], removed.join('\n'), 960_000);
   }
 
   prepareRuntime(): Promise<void> {
