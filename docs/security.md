@@ -59,6 +59,12 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 
 ## Isolation on the host
 
+PHP bots' cron jobs run from `fleetpanel-cron-<slug>.timer` as the bot's user, sandboxed
+(`ProtectSystem=strict`, only the bot's folder writable, `NoNewPrivileges`, private `/tmp`). Bot users are
+listed in `/etc/cron.deny`, so a bot cannot install crontab entries of its own; `/cron/` and `/cronbot/` are
+reachable from the server itself only. The nginx sites also deny `storage/`, `api/handlers/`, `api/lib/`,
+`panel/lib/` and Faoxima's cronbot state files, as the upstream projects' own configurations do.
+
 Service bots (PasarguardBot) additionally:
 
 - run as systemd services under `fp-<slug>` with `ProtectSystem=strict` (only their own folder is

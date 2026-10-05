@@ -2,6 +2,19 @@
 
 ## v0.4.2 (dev channel)
 
+### Added
+- **Cron jobs for MirzaBot and Faoxima.** Their own dispatcher (`cronbot/run.php`, `cron/cron.php`) now runs
+  every minute from a sandboxed systemd timer as the bot's user, so expiry and activation of services,
+  payment checks, notifications, broadcasts and the bots' own backups work. Existing bots get it when the
+  panel starts after `fleetpanel update`; `doctor` checks the timers and `fleetpanel logs <slug>` shows them.
+
+### Security
+- Bot users may not install crontab entries of their own (`/etc/cron.deny`): one supervised scheduler, and
+  no persistent cron job for a compromised bot.
+- `/cron/` and `/cronbot/` are reachable from the server itself only, and the PHP bots' sites also deny
+  `storage/`, `api/handlers/`, `api/lib/`, `panel/lib/` and Faoxima's cronbot state files, like the
+  projects' own nginx configurations. Applied to existing bots at panel start (checked with `nginx -t`).
+
 ### Changed
 - A shorter CLI menu: 8 items instead of 12. *Status* already lists the bots (no separate *Instances*);
   *Logs* offers the panel's log or any Python bot's log; *Backups* lists, backs up the panel and restores;

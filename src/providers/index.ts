@@ -65,6 +65,8 @@ export interface PhpProvider extends ProviderBase {
   installerDir: string;
   /** Schema/bootstrap script run with the PHP CLI once the database exists. */
   schemaScript: string;
+  /** The bot's own cron dispatcher; FleetPanel runs it every minute as the bot's user. */
+  cronScript: string;
   /** Fills the upstream config template. Throws if the template no longer has the expected shape. */
   renderConfig(template: string, ctx: ProviderContext): string;
   /** Optional SQL run after the schema script (values are validated, so they are safe to inline). */
@@ -165,6 +167,8 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     configFile: 'config.php',
     installerDir: 'install',
     schemaScript: 'table.php',
+    // run.php checks each job's own schedule (cronbot/jobs.php) and holds a lock.
+    cronScript: 'cronbot/run.php',
     renderConfig: (template, c) =>
       addHeader(
         fillPlaceholders(template, {
@@ -197,6 +201,8 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     configFile: 'config.php',
     installerDir: 'installer',
     schemaScript: 'table.php',
+    // From the CLI, cron.php runs the due cronbot/ jobs as processes (HTTP only as a fallback).
+    cronScript: 'cron/cron.php',
     renderConfig: (template, c) => {
       const filled = fillEmptyAssignments(template, {
         dbname: c.dbName,

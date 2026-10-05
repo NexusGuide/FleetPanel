@@ -58,6 +58,7 @@ function main(): void {
     version: VERSION,
   });
   controlBackup.start();
+  void instances.refreshPhpInstances();
 
   const admins = (db.prepare('SELECT COUNT(*) AS n FROM admins').get() as { n: number }).n;
   if (admins === 0) log.warn('No administrators exist yet. Create one with: sudo fleetpanel create-admin <username>');

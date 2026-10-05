@@ -75,6 +75,9 @@ export function fakeRunner(calls: ToolCalls, instancesDir: () => string) {
     async prepareRuntime(): Promise<void> {
       calls.service.push('runtime');
     },
+    async refreshInstance(slug: string, cronScript: string): Promise<void> {
+      calls.service.push(`${slug}:cron:${cronScript}`);
+    },
     async writeEnv(slug: string, env: string): Promise<void> {
       calls.env[slug] = env;
     },

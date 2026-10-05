@@ -18,6 +18,11 @@ export interface PrivilegedOps {
   runComposer(slug: string): Promise<void>;
   /** Runs one of the bot's PHP scripts with the CLI as the instance's own Linux user. */
   runPhp(slug: string, script: string): Promise<void>;
+  /**
+   * For a PHP bot: runs its cron dispatcher every minute (systemd timer, as its own user), denies it
+   * a crontab of its own and brings its nginx site up to date. Idempotent.
+   */
+  refreshInstance(slug: string, cronScript: string): Promise<void>;
   /** Installs the pinned Python toolchain (uv, Python, bun) and Redis once per server. */
   prepareRuntime(): Promise<void>;
   /** Stores a service bot's environment (KEY=value lines) where only root can read it. */
@@ -46,6 +51,10 @@ export class SudoHelper implements PrivilegedOps {
 
   runPhp(slug: string, script: string): Promise<void> {
     return this.call(['instance-run', slug, 'php', script], undefined, 960_000);
+  }
+
+  refreshInstance(slug: string, cronScript: string): Promise<void> {
+    return this.call(['instance-refresh', slug, cronScript]);
   }
 
   prepareRuntime(): Promise<void> {

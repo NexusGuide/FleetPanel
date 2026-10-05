@@ -118,7 +118,7 @@ now or switches between `main`, `dev` and a specific version):
 | `fleetpanel doctor` | Checks the whole host and reports `[PASS]` / `[WARN]` / `[FAIL]` |
 | `fleetpanel start` / `stop` / `restart` | Control the panel service (bots keep running) |
 | `fleetpanel logs [N] [-f]` | Last N log lines (secrets are masked); `-f` follows |
-| `fleetpanel logs SLUG [N] [-f]` | Log of a Python bot (PasarguardBot) |
+| `fleetpanel logs SLUG [N] [-f]` | A bot's log (Python bots: the bot; PHP bots: their cron jobs) |
 | `fleetpanel instances` | List bot instances with provider, domain, bot and status |
 | `fleetpanel backups [SLUG]` | List instance backups and control-plane backups |
 | `fleetpanel backup` | Back up the control plane: panel database **and master key** |
@@ -219,7 +219,6 @@ CI runs type-checking, tests, the build and `shellcheck`. See [CONTRIBUTING.md](
 
 ## Roadmap
 
-- Cron jobs for the bots' scheduled tasks (expiry reminders, built-in bot backups)
 - Restoring a backup into a deleted instance
 - Per-instance version pinning and upgrades
 - Off-site copies of the bots' own data

@@ -10,10 +10,9 @@ FleetPanel keeps two kinds of backups apart:
 The panel backup does not copy the bots' data: the bots back themselves up and send their database
 backups to Telegram, and those backups are restored with **Import database** after the panel is back.
 
-> **MirzaBot and Faoxima:** their automatic backups run from their cron script (`cronbot/jobs.php`), and
-> FleetPanel does not install the PHP bots' cron jobs yet. Until it does, take bot backups with the bot's
-> own backup command in its admin menu, or with FleetPanel's **Backup** button (kept on this server, so
-> copy them off it). PasarguardBot schedules its own backups.
+MirzaBot and Faoxima send their backups from their cron jobs, which FleetPanel runs since v0.4.2 (see
+[providers.md](providers.md#cron-jobs-of-php-bots)); set the backup chat in each bot's admin menu.
+PasarguardBot schedules its own backups.
 
 ## Telegram backup
 
