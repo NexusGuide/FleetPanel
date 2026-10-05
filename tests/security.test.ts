@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SecretBox, generatePassword, safeEqual } from '../src/security/crypto.js';
@@ -7,7 +8,7 @@ import { createInstanceSchema } from '../src/security/validation.js';
 import { can, permissionsFor } from '../src/security/rbac.js';
 import { maskSecrets } from '../src/security/mask.js';
 import { passwordPolicyErrors } from '../src/security/passwords.js';
-import { dbIdentFor, instanceDir } from '../src/services/instances.js';
+import { dbIdentFor, instanceDir, webPanelPassword } from '../src/services/instances.js';
 import { assertSafeArchiveEntries, assertSafeArchiveLinks, assertSafeSqlDump, backupExcludes } from '../src/services/backups.js';
 import { clientKey } from '../src/http/rateLimit.js';
 import { gitCheckout } from '../src/system/git.js';
@@ -180,9 +181,13 @@ describe('service bots', () => {
     expect(createInstanceSchema.safeParse({ ...pasar, api_id: '12345', api_hash: `${'a'.repeat(31)}$` }).success).toBe(false);
   });
 
-  it('masks database URL passwords and API hashes in errors', () => {
-    const text = 'connect mysql+asyncmy://fp_demo:S3cretPass@localhost/fp_demo failed; API_HASH=0123456789abcdef0123456789abcdef';
+  it('masks database URL passwords, web panel passwords and API hashes in errors', () => {
+    const text =
+      'connect mysql+asyncmy://fp_demo:S3cretPass@localhost/fp_demo failed; API_HASH=0123456789abcdef0123456789abcdef; ' +
+      'postgresql+asyncpg://fp_clock:PgS3cret@127.0.0.1:5432/fp_clock WEB_ADMIN_PASSWORD=Ab1cD-ef2Gh';
     expect(maskSecrets(text)).not.toContain('S3cretPass');
+    expect(maskSecrets(text)).not.toContain('PgS3cret');
+    expect(maskSecrets(text)).not.toContain('Ab1cD-ef2Gh');
     expect(maskSecrets(text)).not.toContain('0123456789abcdef0123456789abcdef');
   });
 
@@ -193,6 +198,56 @@ describe('service bots', () => {
       '--exclude=demo/frontend/node_modules',
       '--exclude=demo/data/redis/redis.sock',
     ]);
+  });
+});
+
+describe('service bot environment', () => {
+  // The root helper re-validates every line it stores (instance-env): read its own allowlist and pattern.
+  const helper = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'fleetpanel-helper'), 'utf8');
+  const keys = (/^readonly ENV_KEYS="([^"]+)"/m.exec(helper)?.[1] ?? '').trim().split(/\s+/);
+  const line = new RegExp(/^readonly RE_ENV_LINE='([^']+)'/m.exec(helper)?.[1] ?? '^$');
+
+  it.each(PROVIDER_IDS.filter((id) => PROVIDERS[id].runtime === 'python'))('renders an environment the helper accepts (%s)', (id) => {
+    const provider = PROVIDERS[id];
+    if (provider.runtime !== 'python') return;
+    const env = provider.renderEnv({
+      domain: 'bot.example.com',
+      dbName: 'fp_demo_bot',
+      dbUser: 'fp_demo_bot',
+      dbPassword: generatePassword(32),
+      botToken: TOKEN,
+      botUsername: 'demo_bot',
+      adminTelegramId: '42',
+      webhookSecret: 'w'.repeat(43),
+      instanceDir: '/opt/fleetpanel/instances/demo-bot',
+      apiId: '12345',
+      apiHash: 'a'.repeat(32),
+      appPort: 20001,
+      webPassword: webPanelPassword(),
+      webSecret: 's'.repeat(43),
+    });
+    expect(keys.length).toBeGreaterThan(10);
+    for (const [key, value] of Object.entries(env)) {
+      expect(keys).toContain(key);
+      expect(`${key}=${value}`).toMatch(line);
+    }
+    // Nothing that changes how programs load.
+    expect(keys.filter((k) => /^(LD_|PYTHON|PATH$|HOME$|UV_)/.test(k))).toEqual([]);
+  });
+
+  it("generates first web panel passwords that meet the bots' own rules", () => {
+    for (let i = 0; i < 200; i++) {
+      const pw = webPanelPassword();
+      expect(pw).toMatch(/^[A-Za-z0-9]{5}(-[A-Za-z0-9]{5}){3}$/);
+      expect(pw.replace(/\D/g, '').length).toBeGreaterThanOrEqual(2);
+      expect(pw.replace(/[^A-Z]/g, '').length).toBeGreaterThanOrEqual(2);
+      expect(pw.replace(/[^a-z]/g, '').length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('accepts PostgreSQL dumps in backup archives', () => {
+    expect(() => assertSafeArchiveEntries(['database.dump', 'manifest.json', 'demo/', 'demo/run.py'], 'demo')).not.toThrow();
+    expect(() => assertSafeArchiveEntries(['data/postgres.dump'], 'demo')).toThrow(/Unexpected path/);
   });
 });
 

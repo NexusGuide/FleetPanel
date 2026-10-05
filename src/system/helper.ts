@@ -1,13 +1,16 @@
 import { run } from './exec.js';
-import type { WebhookAuth } from '../providers/index.js';
+import type { DbEngine, WebhookAuth } from '../providers/index.js';
 
 /** Install steps of a Python bot, run by the helper as the bot's own Linux user. */
-export type ServiceTask = 'python-deps' | 'webapp-build' | 'python-migrate';
+export type ServiceTask = 'python-deps' | 'python-reqs' | 'webapp-build' | 'python-migrate';
 
 /** Everything that needs root. Implemented by deploy/fleetpanel-helper. */
 export interface PrivilegedOps {
-  createDatabase(dbName: string, dbUser: string, password: string): Promise<void>;
-  dropDatabase(dbName: string, dbUser: string): Promise<void>;
+  createDatabase(dbName: string, dbUser: string, password: string, engine?: DbEngine): Promise<void>;
+  /** Drops the bot's database and user (idempotent). */
+  dropDatabase(dbName: string, dbUser: string, engine?: DbEngine): Promise<void>;
+  /** Installs and starts PostgreSQL once per server (for the bots that use it). */
+  preparePostgres(): Promise<void>;
   fixPermissions(slug: string): Promise<void>;
   createInstance(slug: string, domain: string, webhookPath: string, webhookAuth: WebhookAuth, webhookSecret: string): Promise<void>;
   issueCertificate(domain: string): Promise<void>;
@@ -23,14 +26,19 @@ export interface PrivilegedOps {
    * a crontab of its own and brings its nginx site up to date. Idempotent.
    */
   refreshInstance(slug: string, cronScript: string): Promise<void>;
+  /**
+   * Upgrades a bot's code in place as the bot's own user: deletes the paths the upstream removed,
+   * then copies the prepared new version from the staging directory. The bot's own files stay.
+   */
+  upgradeSync(slug: string, staging: string, removed: string[]): Promise<void>;
   /** Installs the pinned Python toolchain (uv, Python, bun) and Redis once per server. */
   prepareRuntime(): Promise<void>;
   /** Stores a service bot's environment (KEY=value lines) where only root can read it. */
   writeEnv(slug: string, env: string): Promise<void>;
-  /** Runs one install step of a service bot as its own Linux user. */
-  runTask(slug: string, task: ServiceTask): Promise<void>;
-  /** Creates and starts the bot's systemd services and its nginx reverse proxy. */
-  createService(slug: string, domain: string, port: number): Promise<void>;
+  /** Runs one install step of a service bot as its own Linux user (python-reqs takes the Python version). */
+  runTask(slug: string, task: ServiceTask, arg?: string): Promise<void>;
+  /** Creates and starts the bot's systemd services (with its own Redis if asked) and its nginx reverse proxy. */
+  createService(slug: string, domain: string, port: number, entry: string, redis: boolean): Promise<void>;
   /** Waits until the bot's web server answers on loopback; fails with the bot's last log lines. */
   waitForService(slug: string, port: number): Promise<void>;
 }
@@ -57,6 +65,10 @@ export class SudoHelper implements PrivilegedOps {
     return this.call(['instance-refresh', slug, cronScript]);
   }
 
+  upgradeSync(slug: string, staging: string, removed: string[]): Promise<void> {
+    return this.call(['instance-upgrade-sync', slug, staging], removed.join('\n'), 960_000);
+  }
+
   prepareRuntime(): Promise<void> {
     return this.call(['runtime-python'], undefined, 1_260_000);
   }
@@ -65,24 +77,28 @@ export class SudoHelper implements PrivilegedOps {
     return this.call(['instance-env', slug], env);
   }
 
-  runTask(slug: string, task: ServiceTask): Promise<void> {
-    return this.call(['instance-run', slug, task], undefined, 1_860_000);
+  runTask(slug: string, task: ServiceTask, arg?: string): Promise<void> {
+    return this.call(['instance-run', slug, task, ...(arg === undefined ? [] : [arg])], undefined, 1_860_000);
   }
 
-  createService(slug: string, domain: string, port: number): Promise<void> {
-    return this.call(['service-create', slug, domain, String(port)]);
+  createService(slug: string, domain: string, port: number, entry: string, redis: boolean): Promise<void> {
+    return this.call(['service-create', slug, domain, String(port), entry, redis ? 'redis' : 'no-redis']);
   }
 
   waitForService(slug: string, port: number): Promise<void> {
     return this.call(['service-wait', slug, String(port)]);
   }
 
-  createDatabase(dbName: string, dbUser: string, password: string): Promise<void> {
-    return this.call(['db-create', dbName, dbUser], password);
+  createDatabase(dbName: string, dbUser: string, password: string, engine: DbEngine = 'mysql'): Promise<void> {
+    return this.call([engine === 'postgres' ? 'pg-create' : 'db-create', dbName, dbUser], password);
   }
 
-  dropDatabase(dbName: string, dbUser: string): Promise<void> {
-    return this.call(['db-drop', dbName, dbUser]);
+  preparePostgres(): Promise<void> {
+    return this.call(['runtime-postgres'], undefined, 960_000);
+  }
+
+  dropDatabase(dbName: string, dbUser: string, engine: DbEngine = 'mysql'): Promise<void> {
+    return this.call(['db-drop', dbName, dbUser, engine]);
   }
 
   fixPermissions(slug: string): Promise<void> {

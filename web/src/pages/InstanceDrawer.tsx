@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Archive, Copy, DatabaseBackup, ExternalLink, Loader2, X } from 'lucide-react';
-import { api, instanceWebUrl, type Instance, type Permission } from '../api';
-import { Button, ErrorBanner, Notice, Spinner, StatusBadge, Time, formatDate, useResource, useToast } from '../components/ui';
+import { Archive, Copy, DatabaseBackup, ExternalLink, Eye, Loader2, X } from 'lucide-react';
+import { api, instanceWebUrl, isOutdated, type Instance, type Permission } from '../api';
+import { Button, ErrorBanner, Notice, Spinner, StatusBadge, Time, errorText, formatDate, useResource, useToast } from '../components/ui';
 import { InstanceActionButtons } from './InstancesPage';
 import { useInstanceActions } from './instanceActions';
 import { BackupTable } from './BackupsPage';
@@ -31,6 +31,36 @@ function Row({ label, children, copy }: { label: string; children: ReactNode; co
         )}
       </dd>
     </div>
+  );
+}
+
+/** The first login of the bot's own web panel, fetched (and audited) only when asked for. */
+function WebLoginRow({ inst }: { inst: Instance }) {
+  const toast = useToast();
+  const [login, setLogin] = useState<{ username: string; password: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const reveal = async () => {
+    setLoading(true);
+    try {
+      setLogin(await api.webLogin(inst.id));
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <Row label="Web panel login" copy={login?.password}>
+      {login ? (
+        <span title="The first password. Once changed in the bot's own panel, this one no longer works.">
+          {login.username} / {login.password}
+        </span>
+      ) : (
+        <button type="button" disabled={loading} onClick={() => void reveal()} className="inline-flex items-center gap-1 text-slate-400 hover:text-slate-200">
+          {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />} Show
+        </button>
+      )}
+    </Row>
   );
 }
 
@@ -71,6 +101,7 @@ export function InstanceDrawer({
   const fetched = useResource(() => api.instance(instanceId), [instanceId]);
   const providers = useResource(api.providers, []);
   const inst = instance ?? fetched.data;
+  const provider = providers.data?.find((p) => p.id === inst?.provider);
   const [importing, setImporting] = useState(false);
 
   return (
@@ -117,6 +148,32 @@ export function InstanceDrawer({
                 </div>
               )}
 
+              {inst.status !== 'error' && inst.status !== 'provisioning' && inst.last_error && (
+                <Notice tone="warn">{inst.last_error}</Notice>
+              )}
+
+              {isOutdated(inst, providers.data) && (
+                <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-md border border-blue-900/60 bg-blue-950/30 text-xs text-blue-100">
+                  <span>
+                    A newer reviewed version is available:{' '}
+                    <b>{providers.data?.find((p) => p.id === inst.provider)?.version}</b>.
+                  </span>
+                  {can('instances.create') && (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      loading={actions.isPending(inst.id, 'upgrade')}
+                      onClick={() => {
+                        const p = providers.data?.find((x) => x.id === inst.provider);
+                        void actions.upgrade([inst], p ? `${p.name} ${p.version}` : 'the new version');
+                      }}
+                    >
+                      Update bot
+                    </Button>
+                  )}
+                </div>
+              )}
+
               {inst.status === 'stopped' && (
                 <Notice tone="warn">This bot is stopped: its site is disabled and Telegram cannot deliver updates.</Notice>
               )}
@@ -141,6 +198,7 @@ export function InstanceDrawer({
                       /{providers.data?.find((p) => p.id === inst.provider)?.web_path ?? ''} <ExternalLink className="w-3 h-3" />
                     </a>
                   </Row>
+                  {provider?.web_login && can('instances.create') && <WebLoginRow inst={inst} />}
                   <Row label="Telegram bot">
                     {inst.bot_username ? (
                       <a href={`https://t.me/${inst.bot_username}`} target="_blank" rel="noreferrer noopener" className="hover:text-blue-300 inline-flex items-center gap-1">
@@ -155,6 +213,7 @@ export function InstanceDrawer({
                   </Row>
                   <Row label="Database" copy={inst.db_name}>
                     {inst.db_name}
+                    {provider?.database === 'postgres' && <span className="text-slate-500"> · PostgreSQL</span>}
                   </Row>
                   <Row label="Database user">{inst.db_user}</Row>
                   <Row label="Linux user">fp-{inst.slug}</Row>
@@ -211,6 +270,7 @@ export function InstanceDrawer({
       {importing && inst && (
         <ImportDatabaseModal
           inst={inst}
+          postgres={provider?.database === 'postgres'}
           onClose={() => setImporting(false)}
           onDone={() => {
             void backups.reload();

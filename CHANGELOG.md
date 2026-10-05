@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.4.4 (dev channel)
+
+### Added
+- **PGClockBot** ([Mrclocks/PGClockBot](https://github.com/Mrclocks/PGClockBot), pinned at `v0.1.9`): a
+  PasarGuard sales bot with its own web panel, run as a Python service like PasarguardBot. It sets its
+  Telegram webhook itself with FleetPanel's secret; its PasarGuard panel address and login are entered in
+  its web panel.
+- **PostgreSQL** for the bots that need it. It is installed from the distribution with the first such bot,
+  keeps listening on loopback only, and each bot gets its own role that owns only its own database (other
+  roles cannot connect to it). Backups store a `pg_dump` custom-format file; restores and **Import
+  database** use `pg_restore` as the bot's own role. `doctor` checks it.
+- **Web panel login:** FleetPanel sets the first password of PGClockBot's web panel; *Show* in the bot's
+  details reveals it to Owner, Admin and Manager, and each view is audited.
+
+### Security
+- PGClockBot's `requirements.txt` only has version ranges, so FleetPanel ships a lock with exact versions and
+  SHA-256 hashes for it (`deploy/locks/pgclock.txt`, Python 3.12); the packages are installed from wheels
+  only (`uv pip sync --require-hashes --no-build`) as the bot's user.
+- PostgreSQL imports accept `pg_dump` custom-format files only: unlike plain SQL fed to `psql`, nothing in
+  them can run client-side commands. The role creation statements are kept out of the server log.
+
+### Changed
+- A service bot's Redis is optional (PGClockBot has none), and its entry script comes from its provider.
+
+### Fixed
+- After an update, the bot could still be locked (busy) for a moment after its status changed back; the
+  staging copy is now removed before the status changes.
+
+## v0.4.3 (dev channel)
+
+### Added
+- **Bot updates from the panel.** The panel checks the bots' projects every 6 hours (or on *Check for bot
+  updates*) and announces newer versions, which are installed only after they are reviewed and pinned in a
+  FleetPanel release. Bots on an older reviewed version are marked *update*: **Update** one bot, or
+  **Update all** of a type; updates run one at a time.
+- An update keeps the bot's database and the files it created, unlike Repair: safety backup, staged new
+  version, removed upstream files deleted and new files copied as the bot's own user, then dependencies,
+  schema, webhook and cron jobs reapplied. A failure before the bot is stopped leaves it running and
+  unchanged.
+
+### Changed
+- A bot's last message is shown for running and stopped bots too (e.g. *"Update not applied: …"*).
+
+### Fixed (from a review of v0.4.2–v0.4.3)
+- Starting a PHP bot that was stopped before v0.4.2 now creates its cron timer (it was only created at panel
+  start for running bots); an update of a stopped bot no longer starts its cron timer.
+- Bots installed before FleetPanel recorded versions can be updated too (they were never offered an update).
+- An update no longer fails when the installed commit cannot be fetched any more (e.g. rewritten upstream
+  history); it then copies the new version without deleting files.
+- Staging folders of updates interrupted by a restart are removed at start, and the restart message no longer
+  suggests only Repair (which would replace the bot's files) for a bot that was being updated.
+- Links to new bot versions in the panel must be GitHub pages (they come from GitHub's API answer).
+
 ## v0.4.2 (dev channel)
 
 ### Added

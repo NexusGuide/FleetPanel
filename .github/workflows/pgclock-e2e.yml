@@ -1,0 +1,37 @@
+name: PGClockBot e2e
+
+# Installs PGClockBot the way FleetPanel does (PostgreSQL via the helper, the hash-pinned package lock,
+# the schema, the bot started through FleetPanel's launcher) on a real Ubuntu 24.04 machine. Runs when
+# those pieces change, e.g. when the pinned version or its lock is bumped.
+on:
+  pull_request:
+    paths:
+      - deploy/fleetpanel-helper
+      - deploy/locks/**
+      - src/providers/**
+      - tests/e2e/**
+      - .github/workflows/pgclock-e2e.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pgclock:
+    name: PGClockBot on Ubuntu 24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch PGClockBot at the pinned commit
+        run: |
+          commit="$(grep -A6 '^  pgclock: {' src/providers/index.ts | sed -n "s/.*commit: '\([0-9a-f]\{40\}\)'.*/\1/p")"
+          [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "pinned commit not found"; exit 1; }
+          git init -q /tmp/pgclock
+          git -C /tmp/pgclock fetch -q --depth 1 https://github.com/Mrclocks/PGClockBot.git "$commit"
+          git -C /tmp/pgclock checkout -q FETCH_HEAD
+      - run: sudo bash tests/e2e/pgclock.sh /tmp/pgclock

@@ -107,6 +107,31 @@ export interface Provider {
   extra_fields: Array<'api_id' | 'api_hash'>;
   /** The bot's own web page, relative to its domain (e.g. "panel/"). */
   web_path: string;
+  /** Database engine of its bots (PostgreSQL is installed with the first bot that needs it). */
+  database: 'mysql' | 'postgres';
+  /** Its web panel has a login whose first password FleetPanel sets (api.webLogin). */
+  web_login: boolean;
+  /** What the bot's own project published (checked every 6 hours); null before the first check. */
+  upstream: {
+    checked_at: string;
+    latest: string | null;
+    latest_date: string | null;
+    url: string | null;
+    /** Newer than the version this FleetPanel pins: waiting for review. */
+    newer: boolean;
+    error: string | null;
+  } | null;
+}
+
+/** An installed bot running an older reviewed version than this FleetPanel pins. */
+export function isOutdated(inst: Instance, providers: Provider[] | null): boolean {
+  const pinned = providers?.find((p) => p.id === inst.provider)?.commit;
+  // source_commit null: installed before FleetPanel recorded versions, so not known to be current.
+  return (
+    !!pinned &&
+    inst.source_commit !== pinned &&
+    (inst.status === 'running' || inst.status === 'stopped')
+  );
 }
 
 /** Link to an instance's own web page (its admin panel or web app), never the webhook at the root. */
@@ -323,6 +348,10 @@ export const api = {
   checkInstance: (input: CreateInstanceInput) => request<InstanceCheck>('POST', '/api/instances/check', input),
   startInstance: (id: number) => request<{ instance: Instance }>('POST', `/api/instances/${id}/start`).then((r) => r.instance),
   stopInstance: (id: number) => request<{ instance: Instance }>('POST', `/api/instances/${id}/stop`).then((r) => r.instance),
+  upgradeInstance: (id: number) =>
+    request<{ instance: Instance }>('POST', `/api/instances/${id}/upgrade`).then((r) => r.instance),
+  checkUpstream: () => request<{ ok: true }>('POST', '/api/system/providers/check'),
+  webLogin: (id: number) => request<{ username: string; password: string }>('GET', `/api/instances/${id}/web-login`),
   reprovision: (id: number) =>
     request<{ instance: Instance }>('POST', `/api/instances/${id}/reprovision`).then((r) => r.instance),
   deleteInstance: (id: number, withBackup: boolean) =>

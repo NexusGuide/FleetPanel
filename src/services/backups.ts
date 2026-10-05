@@ -7,11 +7,11 @@ import type { ActorRef, AuditLog } from '../audit.js';
 import type { SecretStore } from '../secrets.js';
 import type { PrivilegedOps } from '../system/helper.js';
 import { run } from '../system/exec.js';
-import { withClientConfig } from '../system/toolchain.js';
+import { pgDump, pgRestore, withClientConfig, type DbCredentials } from '../system/toolchain.js';
 import { randomToken } from '../security/crypto.js';
 import { HttpError, errorMessage } from '../errors.js';
 import { instanceDir, type InstanceRow } from './instances.js';
-import { PROVIDERS } from '../providers/index.js';
+import { PROVIDERS, depsTask } from '../providers/index.js';
 
 export type BackupKind = 'manual' | 'pre-delete' | 'pre-restore';
 
@@ -42,13 +42,16 @@ async function sha256File(file: string): Promise<string> {
   return hash.digest('hex');
 }
 
-/** An archive may only contain the instance directory, the SQL dump and the manifest. */
+/** The database part of an archive: a mysqldump, or a pg_dump custom-format file for PostgreSQL bots. */
+const DUMP_FILES = { mysql: 'database.sql', postgres: 'database.dump' } as const;
+
+/** An archive may only contain the instance directory, the database dump and the manifest. */
 export function assertSafeArchiveEntries(entries: string[], slug: string): void {
   for (const raw of entries) {
     const entry = raw.trim().replace(/\/$/, '');
     if (entry === '') continue;
     if (entry.startsWith('/') || entry.split('/').includes('..')) throw new Error(`Unsafe path in archive: ${raw}`);
-    if (entry === 'database.sql' || entry === 'manifest.json' || entry === slug || entry.startsWith(`${slug}/`)) continue;
+    if (entry === DUMP_FILES.mysql || entry === DUMP_FILES.postgres || entry === 'manifest.json' || entry === slug || entry.startsWith(`${slug}/`)) continue;
     throw new Error(`Unexpected path in archive: ${raw}`);
   }
 }
@@ -127,24 +130,33 @@ export class BackupService {
     return withClientConfig({ dbUser: inst.db_user, password: this.d.secrets.get(inst.id, 'db_password') }, fn);
   }
 
+  private pgCredentials(inst: InstanceRow): DbCredentials {
+    return { engine: 'postgres', dbName: inst.db_name, dbUser: inst.db_user, password: this.d.secrets.get(inst.id, 'db_password') };
+  }
+
   async create(inst: InstanceRow, kind: BackupKind, actor: ActorRef = 'system'): Promise<BackupRow> {
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
     const id = `${stamp}-${randomToken(6).replace(/[^A-Za-z0-9]/g, 'x')}`;
     const filename = `${inst.slug}_${kind}_${id}.tar.gz`;
     const dest = path.join(this.d.backupsDir, filename);
     const work = await fs.mkdtemp(path.join(this.d.backupsDir, '.work-'));
+    const engine = PROVIDERS[inst.provider].database;
     try {
-      const dump = path.join(work, 'database.sql');
-      await this.withClientConfig(inst, (cnf) =>
-        run('mysqldump', [
-          `--defaults-extra-file=${cnf}`,
-          '--single-transaction',
-          '--quick',
-          '--no-tablespaces',
-          `--result-file=${dump}`,
-          inst.db_name,
-        ]),
-      );
+      const dump = path.join(work, DUMP_FILES[engine]);
+      if (engine === 'postgres') {
+        await pgDump(this.pgCredentials(inst), dump);
+      } else {
+        await this.withClientConfig(inst, (cnf) =>
+          run('mysqldump', [
+            `--defaults-extra-file=${cnf}`,
+            '--single-transaction',
+            '--quick',
+            '--no-tablespaces',
+            `--result-file=${dump}`,
+            inst.db_name,
+          ]),
+        );
+      }
       const manifest = {
         format: 1,
         slug: inst.slug,
@@ -155,7 +167,7 @@ export class BackupService {
         created_at: new Date().toISOString(),
       };
       await fs.writeFile(path.join(work, 'manifest.json'), JSON.stringify(manifest, null, 2));
-      await run('tar', ['-czf', dest, ...backupExcludes(inst.slug), '-C', this.d.instancesDir, inst.slug, '-C', work, 'database.sql', 'manifest.json'], {
+      await run('tar', ['-czf', dest, ...backupExcludes(inst.slug), '-C', this.d.instancesDir, inst.slug, '-C', work, DUMP_FILES[engine], 'manifest.json'], {
         timeoutMs: 900_000,
       });
       await fs.chmod(dest, 0o600);
@@ -210,6 +222,12 @@ export class BackupService {
     const listing = await run('tar', ['-tvzf', file], { timeoutMs: 300_000 });
     assertSafeArchiveLinks(listing.stdout.split('\n'), inst.slug);
 
+    const provider = PROVIDERS[inst.provider];
+    const dumpName = DUMP_FILES[provider.database];
+    if (!stdout.split('\n').some((e) => e.trim() === dumpName)) {
+      throw new HttpError(409, 'backup_mismatch', `This backup has no ${dumpName}; it was not made for a ${provider.displayName} database.`);
+    }
+
     const safety = await this.create(inst, 'pre-restore', actor);
     const dir = instanceDir(this.d.instancesDir, inst.slug);
     const previous = path.join(this.d.instancesDir, `.previous-${inst.slug}-${Date.now()}`);
@@ -218,19 +236,27 @@ export class BackupService {
     try {
       await run('tar', ['-xzf', file, '-C', work, '--no-same-owner', '--no-same-permissions'], { timeoutMs: 900_000 });
       // Check the dump before touching the running instance.
-      const sql = await fs.readFile(path.join(work, 'database.sql'), 'utf8');
-      assertSafeSqlDump(sql);
+      const dumpFile = path.join(work, dumpName);
+      const sql = provider.database === 'mysql' ? await fs.readFile(dumpFile, 'utf8') : null;
+      if (sql !== null) assertSafeSqlDump(sql);
       await this.d.ops.disableInstance(inst.slug);
       await fs.rename(dir, previous);
       swapped = true;
       await fs.rename(path.join(work, inst.slug), dir);
-      await this.withClientConfig(inst, (cnf) =>
-        // --binary-mode turns off mysql client commands (\\!, system, ...) in non-interactive input.
-        run('mysql', [`--defaults-extra-file=${cnf}`, '--binary-mode', inst.db_name], { input: sql, timeoutMs: 900_000 }),
-      );
+      if (sql === null) {
+        await pgRestore(this.pgCredentials(inst), dumpFile);
+      } else {
+        await this.withClientConfig(inst, (cnf) =>
+          // --binary-mode turns off mysql client commands (\\!, system, ...) in non-interactive input.
+          run('mysql', [`--defaults-extra-file=${cnf}`, '--binary-mode', inst.db_name], { input: sql, timeoutMs: 900_000 }),
+        );
+      }
       await this.d.ops.fixPermissions(inst.slug);
       // The archive has no virtualenv (see backupExcludes); rebuild it from the lock file.
-      if (PROVIDERS[inst.provider].runtime === 'python') await this.d.ops.runTask(inst.slug, 'python-deps');
+      if (provider.runtime === 'python') {
+        const deps = depsTask(provider);
+        await this.d.ops.runTask(inst.slug, deps.task, deps.arg);
+      }
       await this.d.ops.enableInstance(inst.slug);
       await fs.rm(previous, { recursive: true, force: true });
       this.d.audit.write({

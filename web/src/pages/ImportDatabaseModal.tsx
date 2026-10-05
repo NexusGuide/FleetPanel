@@ -5,8 +5,21 @@ import { Button, ErrorBanner, Modal, Notice, errorText, useToast } from '../comp
 
 const MAX_BYTES = 512 * 1024 * 1024;
 
-/** Replaces a bot's database with one of the bot's own backups (.sql, .sql.gz or .zip). */
-export function ImportDatabaseModal({ inst, onClose, onDone }: { inst: Instance; onClose: () => void; onDone: () => void }) {
+/**
+ * Replaces a bot's database with one of the bot's own backups: .sql, .sql.gz or .zip (MariaDB), or a
+ * pg_dump custom-format .dump or the bot's backup .zip (PostgreSQL).
+ */
+export function ImportDatabaseModal({
+  inst,
+  postgres,
+  onClose,
+  onDone,
+}: {
+  inst: Instance;
+  postgres: boolean;
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
@@ -48,17 +61,25 @@ export function ImportDatabaseModal({ inst, onClose, onDone }: { inst: Instance;
       }
     >
       <div className="space-y-4 text-xs text-slate-300">
-        <p>
-          Upload a backup the bot made of its own database: a <span className="font-mono">.sql</span>,{' '}
-          <span className="font-mono">.sql.gz</span> or <span className="font-mono">.zip</span> with one .sql file (512 MB at most).
-        </p>
+        {postgres ? (
+          <p>
+            Upload a backup of the bot's PostgreSQL database: the <span className="font-mono">.zip</span> backup the bot
+            made itself, or a <span className="font-mono">.dump</span> from <span className="font-mono">pg_dump -Fc</span> (512 MB
+            at most). Plain .sql files are not accepted.
+          </p>
+        ) : (
+          <p>
+            Upload a backup the bot made of its own database: a <span className="font-mono">.sql</span>,{' '}
+            <span className="font-mono">.sql.gz</span> or <span className="font-mono">.zip</span> with one .sql file (512 MB at most).
+          </p>
+        )}
         <Notice tone="warn">
           The bot's current database is replaced. A safety backup is taken first, and the bot is offline for the
           import.
         </Notice>
         <input
           type="file"
-          accept=".sql,.gz,.zip,application/sql,application/gzip,application/zip"
+          accept={postgres ? '.dump,.gz,.zip,application/gzip,application/zip' : '.sql,.gz,.zip,application/sql,application/gzip,application/zip'}
           disabled={busy}
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-md file:border file:border-slate-700 file:bg-slate-900 file:px-3 file:py-1.5 file:text-slate-200"

@@ -4,6 +4,7 @@ import { Router } from 'express';
 import type { AppDeps } from '../deps.js';
 import { requirePermission } from '../middleware.js';
 import { ah } from '../util.js';
+import { rateLimit } from '../rateLimit.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../providers/index.js';
 import { VERSION } from '../../version.js';
 
@@ -55,19 +56,38 @@ export function systemRoutes(d: AppDeps): Router {
   );
 
   r.get('/providers', (_req, res) => {
+    const upstream = d.upstream?.status() ?? {};
     res.json({
-      providers: PROVIDER_IDS.map((id) => ({
-        id,
-        name: PROVIDERS[id].displayName,
-        repo_url: PROVIDERS[id].repoUrl,
-        version: PROVIDERS[id].version,
-        commit: PROVIDERS[id].commit,
-        runtime: PROVIDERS[id].runtime,
-        extra_fields: PROVIDERS[id].extraFields,
-        web_path: PROVIDERS[id].webPath,
-      })),
+      providers: PROVIDER_IDS.map((id) => {
+        const p = PROVIDERS[id];
+        return {
+          upstream: upstream[id] ?? null,
+          id,
+          name: p.displayName,
+          repo_url: p.repoUrl,
+          version: p.version,
+          commit: p.commit,
+          runtime: p.runtime,
+          extra_fields: p.extraFields,
+          web_path: p.webPath,
+          database: p.database,
+          web_login: p.runtime === 'python' && p.webLogin,
+        };
+      }),
     });
   });
+
+  // Checks the bots' projects for new versions now (otherwise every 6 hours).
+  const checks = rateLimit({ limit: 5, windowMs: 5 * 60_000, key: (req) => `up|${req.auth?.adminId ?? req.ip}` });
+  r.post(
+    '/providers/check',
+    requirePermission('instances.create', d.audit),
+    checks,
+    ah(async (_req, res) => {
+      await d.upstream?.check();
+      res.json({ ok: true });
+    }),
+  );
 
   return r;
 }

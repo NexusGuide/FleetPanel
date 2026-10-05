@@ -18,13 +18,13 @@
 
 <div dir="rtl">
 
-ربات‌های **MirzaBot**، **Faoxima** و **PasarguardBot** را روی یک VPS اوبونتو یا دبیان، جدا از هم نصب و اجرا کنید.
-هر ربات کاربر لینوکس، دیتابیس MySQL، سایت nginx و گواهی Let's Encrypt مخصوص خودش را دارد (به‌علاوه‌ی
+ربات‌های **MirzaBot**، **Faoxima**، **PasarguardBot** و **PGClockBot** را روی یک VPS اوبونتو یا دبیان، جدا از هم نصب و اجرا کنید.
+هر ربات کاربر لینوکس، دیتابیس (MySQL، یا PostgreSQL برای PGClockBot)، سایت nginx و گواهی Let's Encrypt مخصوص خودش را دارد (به‌علاوه‌ی
 PHP-FPM برای ربات‌های PHP، یا یک سرویس ایزوله‌ی systemd با Redis جدا برای ربات‌های پایتونی). مدیریت هم از
 پنل وب و هم از خط فرمان (CLI) انجام می‌شود.
 
 > **وضعیت: نسخه‌ی 0.4 (پیش‌انتشار).** پنل وب، نصب ربات‌ها، CLI و آپدیت روی یک سرور واقعی Ubuntu 24.04 با
-> MirzaBot و Faoxima تست شده‌اند. پشتیبانی از PasarguardBot در v0.4.0 اضافه شده است.
+> MirzaBot، Faoxima و PasarguardBot تست شده‌اند. پشتیبانی از PGClockBot در v0.4.4 اضافه شده است.
 > [تغییرات](CHANGELOG.md) و برنامه‌ی آینده (پایین همین صفحه) را ببینید.
 
 ---
@@ -65,12 +65,14 @@ curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/main/install.
 - **داشبورد:** تعداد ربات‌ها، بار CPU، رم و دیسک سرور، فعالیت‌های اخیر
 - **ربات‌ها (Instances):** ویزارد ساخت ربات، روشن/خاموش، بکاپ، **تعمیر (Repair)**، حذف (با بکاپ قبل از حذف).
   اگر نصب خطا بدهد، پنل مرحله‌ی خطادار و متن واقعی خطا را نشان می‌دهد.
+- **آپدیت ربات‌ها:** نسخه‌های جدید ربات‌ها اعلام می‌شوند؛ نسخه‌های بررسی‌شده از داخل پنل نصب می‌شوند، برای یک ربات
+  یا همه‌ی ربات‌های یک نوع با هم، بدون از دست رفتن داده‌ی ربات
 - **بکاپ‌ها:** فهرست، بازگردانی (اول یک بکاپ ایمنی گرفته می‌شود)، حذف؛ **وارد کردن بکاپ دیتابیس خود ربات**
 - **تنظیمات:** بکاپ رمزنگاری‌شده‌ی پنل به تلگرام با زمان‌بندی ([بازیابی بعد از خرابی سرور](docs/backup.md))
 - **مدیران** (فقط Owner)، **گزارش فعالیت‌ها (Audit log)** و **حساب من** (رمز عبور، نشست‌ها)
 
-ساخت ربات: DNS دامنه‌ی ربات را به سرور وصل کنید، بعد *New instance* ← انتخاب MirzaBot، Faoxima یا
-PasarguardBot ← دامنه، توکن ربات از @BotFather و آیدی عددی تلگرام شما (PasarguardBot علاوه بر این API ID و
+ساخت ربات: DNS دامنه‌ی ربات را به سرور وصل کنید، بعد *New instance* ← انتخاب MirzaBot، Faoxima،
+PasarguardBot یا PGClockBot ← دامنه، توکن ربات از @BotFather و آیدی عددی تلگرام شما (PasarguardBot علاوه بر این API ID و
 API Hash از [my.telegram.org](https://my.telegram.org) لازم دارد). FleetPanel نسخه‌ی قفل‌شده‌ی ربات را دانلود
 می‌کند، تنظیماتش را می‌نویسد، وابستگی‌ها و جدول‌های دیتابیس را با کاربر خود ربات نصب می‌کند، دیتابیس و سایت
 nginx را می‌سازد، گواهی SSL می‌گیرد و ربات را به تلگرام وصل می‌کند.
@@ -80,6 +82,7 @@ nginx را می‌سازد، گواهی SSL می‌گیرد و ربات را ب�
 | MirzaBot | PHP-FPM + وب‌هوک تلگرام | پنل‌ها: Marzban، X-UI، S-UI، Hiddify و ... |
 | Faoxima | PHP-FPM + وب‌هوک تلگرام | پنل‌ها: Marzban، X-UI |
 | PasarguardBot | سرویس پایتون (systemd) + Redis جدا | پنل: PasarGuard · حدود ۳۰۰ مگابایت رم برای هر ربات |
+| PGClockBot | سرویس پایتون (systemd) + PostgreSQL | پنل: PasarGuard · پنل وب مخصوص خودش (رمز اول در جزئیات ربات) |
 
 ---
 
@@ -267,8 +270,8 @@ bash -n install.sh bin/fleetpanel deploy/fleetpanel-helper
 
 ## 📄 مجوز
 
-FleetPanel یک نرم‌افزار متن‌باز با [مجوز MIT](LICENSE) است. MirzaBot، Faoxima و PasarguardBot پروژه‌های
-جداگانه با مجوزهای خودشان هستند (PasarguardBot: AGPL-3.0)؛ FleetPanel آن‌ها را بدون تغییر و موقع نصب از
+FleetPanel یک نرم‌افزار متن‌باز با [مجوز MIT](LICENSE) است. MirzaBot، Faoxima، PasarguardBot و PGClockBot پروژه‌های
+جداگانه با مجوزهای خودشان هستند (PasarguardBot: AGPL-3.0، PGClockBot: MIT)؛ FleetPanel آن‌ها را بدون تغییر و موقع نصب از
 مخزن خودشان دانلود می‌کند.
 
 </div>

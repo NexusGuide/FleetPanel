@@ -27,8 +27,11 @@ const tools = fakeToolchain();
 const createdSites: Array<{ slug: string; auth: string }> = [];
 const webhooks: string[] = [];
 const clearedWebhooks: string[] = [];
+const createdDatabases: string[] = [];
 const ops: PrivilegedOps = {
-  createDatabase: noop,
+  createDatabase: async (db, _user, _password, engine = 'mysql') => {
+    createdDatabases.push(`${db}:${engine}`);
+  },
   dropDatabase: noop,
   fixPermissions: noop,
   createInstance: async (slug, _domain, _hook, auth) => {
@@ -64,6 +67,8 @@ const TOKEN = `123456789:${'A'.repeat(35)}`;
 let server: http.Server;
 let base = '';
 let tmp = '';
+let db: ReturnType<typeof openDb>;
+let removedFilesFails = false;
 
 interface Reply {
   status: number;
@@ -146,10 +151,11 @@ beforeAll(async () => {
   fs.mkdirSync(instancesDir);
   fs.mkdirSync(backupsDir);
 
-  const db = openDb(':memory:');
+  db = openDb(':memory:');
   const insert = db.prepare('INSERT INTO admins (username, password_hash, role) VALUES (?, ?, ?)');
   insert.run('owner', await hashPassword('Owner-Password-1'), 'Owner');
   insert.run('viewer', await hashPassword('Viewer-Password-1'), 'Viewer');
+  insert.run('manager', await hashPassword('Manager-Password-1'), 'Manager');
 
   const audit = new AuditLog(db);
   const secrets = new SecretStore(db, SecretBox.fromKey(crypto.randomBytes(32)));
@@ -174,6 +180,10 @@ beforeAll(async () => {
     backups,
     instancesDir,
     git: fakeClone,
+    gitRemovedFiles: async () => {
+      if (removedFilesFails) throw new Error('fatal: remote error: upload-pack: not our ref');
+      return ['old/legacy.php'];
+    },
     tools,
   });
   const app = createApp({ db, sessions: new SessionStore(db), audit, instances, backups, controlBackup, cookieSecure: false, trustProxy: false, dataRoot: tmp });
@@ -436,7 +446,7 @@ describe('API security', () => {
       'pasar-bot:python-deps',
       'pasar-bot:webapp-build',
       'pasar-bot:python-migrate',
-      `pasar-bot:service:pasar.example.com:${20000 + id}`,
+      `pasar-bot:service:pasar.example.com:${20000 + id}:main.py:redis`,
       `pasar-bot:wait:${20000 + id}`,
     ]);
     const dir = path.join(tmp, 'instances', 'pasar-bot');
@@ -473,6 +483,103 @@ describe('API security', () => {
     expect(createdSites.some((s) => s.slug === 'pasar-bot')).toBe(false);
   });
 
+  it('installs PGClockBot on PostgreSQL with pinned packages and a first web login', async () => {
+    // A Manager can install bots and see their first web login.
+    const { cookie, csrf } = await login('manager', 'Manager-Password-1');
+    telegram.getMe = async () => ({ id: 4, username: 'clock_bot' });
+    const callsBefore = tools.calls.service.length;
+    const res = await request('POST', '/api/instances', {
+      headers: { cookie, 'x-csrf-token': csrf },
+      body: { slug: 'clock-bot', provider: 'pgclock', domain: 'clock.example.com', bot_token: TOKEN, admin_telegram_id: '42' },
+    });
+    expect(res.status).toBe(202);
+    const id = res.body.instance.id as number;
+    let inst = res.body.instance;
+    for (let i = 0; i < 50 && inst.status === 'provisioning'; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      inst = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+    }
+    expect(inst.last_error).toBeNull();
+    expect(inst.status).toBe('running');
+    expect(inst.source_commit).toBe(PROVIDERS.pgclock.commit);
+    expect(createdDatabases).toContain('fp_clock_bot:postgres');
+
+    // PostgreSQL first, packages from FleetPanel's lock on Python 3.12, no Redis and no web-app build.
+    const steps = tools.calls.service.slice(callsBefore);
+    expect(steps).toEqual([
+      'postgres',
+      'runtime',
+      'clock-bot:python-reqs:3.12',
+      'clock-bot:python-migrate',
+      `clock-bot:service:clock.example.com:${20000 + id}:run.py:no-redis`,
+      `clock-bot:wait:${20000 + id}`,
+    ]);
+    const dir = path.join(tmp, 'instances', 'clock-bot');
+    const lock = fs.readFileSync(path.join(dir, 'fleetpanel-requirements.txt'), 'utf8');
+    expect(lock).toBe(fs.readFileSync(path.join(__dirname, '..', 'deploy', 'locks', 'pgclock.txt'), 'utf8'));
+    // Every package is pinned to one version and carries hashes.
+    const pins = lock.split('\n').filter((l) => /^[a-z0-9]/i.test(l));
+    expect(pins.length).toBeGreaterThan(20);
+    for (const pin of pins) expect(pin).toMatch(/^[a-z0-9._-]+==[0-9][^ ]* (; .+ )?\\$/i);
+    expect(lock.split('--hash=sha256:').length - 1).toBeGreaterThanOrEqual(pins.length);
+    // Its .env holds what is edited in its own panel: FleetPanel writes none.
+    expect(fs.existsSync(path.join(dir, '.env'))).toBe(false);
+
+    const env = Object.fromEntries((tools.calls.env['clock-bot'] ?? '').split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    expect(env).toMatchObject({
+      BOT_TOKEN: TOKEN,
+      BOT_USERNAME: 'clock_bot',
+      ADMIN_IDS: '42',
+      WEB_HOST: '127.0.0.1',
+      WEB_PORT: String(20000 + id),
+      WEB_ADMIN_USER: 'admin',
+      WEBHOOK_URL: 'https://clock.example.com',
+      WEBHOOK_PATH: '/telegram/webhook',
+      PUBLIC_BASE_URL: 'https://clock.example.com',
+      TRUST_PROXY: '1',
+    });
+    expect(env.DATABASE_URL).toMatch(/^postgresql\+asyncpg:\/\/fp_clock_bot:[A-Za-z0-9]{32}@127\.0\.0\.1:5432\/fp_clock_bot$/);
+    expect(env.WEBHOOK_SECRET_TOKEN).toMatch(/^[A-Za-z0-9_-]{32,}$/);
+    expect(env.WEB_SECRET).toMatch(/^[A-Za-z0-9_-]{32,}$/);
+    expect(tools.calls.sqlEngines.at(-1)).toBe('postgres');
+
+    // The first web login: Owner/Admin/Manager only, audited, and none for bots without one.
+    const viewer = await login('viewer', 'Viewer-Password-1');
+    expect((await request('GET', `/api/instances/${id}/web-login`, { headers: { cookie: viewer.cookie } })).status).toBe(403);
+    const web = await request('GET', `/api/instances/${id}/web-login`, { headers: { cookie } });
+    expect(web.status).toBe(200);
+    expect(web.body.username).toBe('admin');
+    expect(web.body.password).toBe(env.WEB_ADMIN_PASSWORD);
+    // Meets the bot's own rules: 12+ characters, 2+ digits, upper- and lowercase letters, a special character.
+    expect(web.body.password).toMatch(/^[A-Za-z0-9]{5}(-[A-Za-z0-9]{5}){3}$/);
+    expect(web.body.password.replace(/\D/g, '').length).toBeGreaterThanOrEqual(2);
+    const audit = await request('GET', '/api/audit-logs', { headers: { cookie } });
+    expect(audit.body.entries.some((e: { action: string; actor: string }) => e.action === 'INSTANCE_WEB_LOGIN_VIEW' && e.actor.includes('manager'))).toBe(true);
+    const list = (await request('GET', '/api/instances', { headers: { cookie } })).body.instances as Array<{ id: number; slug: string }>;
+    const pasar = list.find((i) => i.slug === 'pasar-bot')?.id;
+    expect((await request('GET', `/api/instances/${pasar}/web-login`, { headers: { cookie } })).status).toBe(404);
+
+    // Database import (Owner/Admin): pg_dump custom-format files only (plain SQL would need psql,
+    // which runs client-side commands found in its input).
+    const owner = await login('owner', 'Owner-Password-1');
+    const realCreate = backups.create.bind(backups);
+    backups.create = async () => ({ id: '20261005T000000Z-safe0002' }) as Awaited<ReturnType<BackupService['create']>>;
+    const upload = (body: string) =>
+      rawRequest('POST', `/api/instances/${id}/import-db`, { cookie: owner.cookie, 'x-csrf-token': owner.csrf, 'content-type': 'application/octet-stream' }, body);
+    try {
+      const sql = await upload('CREATE TABLE t (id int);\n\\! touch /tmp/pwned\n');
+      expect(sql.status).toBe(400);
+      expect(sql.body.error).toBe('not_a_dump');
+      const ok = await upload('PGDMP\u0001\u000e\u0000 custom dump');
+      expect(ok.status).toBe(200);
+      expect(tools.calls.imports.at(-1)).toMatch(/^postgres:PGDMP/);
+      // Schema brought up to date afterwards.
+      expect(tools.calls.service.at(-1)).toBe('clock-bot:python-migrate');
+    } finally {
+      backups.create = realCreate;
+    }
+  });
+
   it('imports a bot database backup safely and reapplies FleetPanel settings', async () => {
     const { cookie, csrf } = await login('owner', 'Owner-Password-1');
     const list = (await request('GET', '/api/instances', { headers: { cookie } })).body.instances as Array<{ id: number; slug: string }>;
@@ -486,10 +593,11 @@ describe('API security', () => {
     try {
       expect((await upload('x', 'text/plain')).status).toBe(415);
 
+      const importsBefore = tools.calls.imports.length;
       const unsafe = await upload('CREATE TABLE t (id int);\n\\! touch /tmp/pwned\n');
       expect(unsafe.status).toBe(400);
       expect(unsafe.body.error).toBe('unsafe_dump');
-      expect(tools.calls.imports).toHaveLength(0);
+      expect(tools.calls.imports).toHaveLength(importsBefore);
 
       const dump = [
         '-- MariaDB dump',
@@ -563,6 +671,113 @@ describe('API security', () => {
     }
   });
 
+  it('updates an outdated bot to the reviewed version, keeping its data', async () => {
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    const headers = { cookie, 'x-csrf-token': csrf };
+    const list = (await request('GET', '/api/instances', { headers: { cookie } })).body.instances as Array<{ id: number; slug: string }>;
+    const bot = list.find((i) => i.slug === 'demo-bot');
+    expect(bot).toBeTruthy();
+    const id = bot?.id as number;
+
+    // Already on the pinned version: nothing to do.
+    expect((await request('POST', `/api/instances/${id}/upgrade`, { headers })).body.error).toBe('up_to_date');
+
+    // A failure before the bot is touched (here: the safety backup) leaves it running.
+    db.prepare('UPDATE instances SET source_commit = ? WHERE id = ?').run('a'.repeat(40), id);
+    const failing = backups.create.bind(backups);
+    backups.create = async () => {
+      throw new Error('mysqldump failed: disk full');
+    };
+    try {
+      await request('POST', `/api/instances/${id}/upgrade`, { headers });
+      let early = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+      for (let i = 0; i < 50 && early.status === 'provisioning'; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        early = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+      }
+      expect(early.status).toBe('running');
+      expect(early.last_error).toMatch(/^Update not applied \(the bot was not changed\): Taking a safety backup: mysqldump failed: disk full/);
+      expect(early.source_commit).toBe('a'.repeat(40));
+    } finally {
+      backups.create = failing;
+    }
+
+    // Pretend it was installed from an older pin, with data of its own and a file the upstream later removed.
+    db.prepare('UPDATE instances SET source_commit = ? WHERE id = ?').run('a'.repeat(40), id);
+    const dir = path.join(tmp, 'instances', 'demo-bot');
+    fs.mkdirSync(path.join(dir, 'storage'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'storage', 'receipt.jpg'), 'customer data');
+    fs.mkdirSync(path.join(dir, 'old'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'old', 'legacy.php'), '<?php // removed upstream');
+
+    const realCreate = backups.create.bind(backups);
+    backups.create = async () => ({ id: '20261005T000000Z-upgr0001' }) as Awaited<ReturnType<BackupService['create']>>;
+    try {
+      const res = await request('POST', `/api/instances/${id}/upgrade`, { headers });
+      expect(res.status).toBe(202);
+      expect(res.body.instance.status).toBe('provisioning');
+      let inst = res.body.instance;
+      for (let i = 0; i < 100 && inst.status === 'provisioning'; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        inst = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+      }
+      expect(inst.last_error).toBeNull();
+      expect(inst.status).toBe('running');
+      expect(inst.source_commit).toBe(PROVIDERS.mirza.commit);
+
+      expect(fs.readFileSync(path.join(dir, 'storage', 'receipt.jpg'), 'utf8')).toBe('customer data');
+      expect(fs.existsSync(path.join(dir, 'old', 'legacy.php'))).toBe(false);
+      expect(fs.existsSync(path.join(dir, 'install'))).toBe(false);
+      expect(fs.existsSync(path.join(dir, '.git'))).toBe(false);
+      expect(fs.readFileSync(path.join(dir, 'config.php'), 'utf8')).toContain(`$APIKEY = '${TOKEN}';`);
+      // The staging copy is gone.
+      expect(fs.readdirSync(path.join(tmp, 'instances')).filter((n) => n.startsWith('.upgrade-'))).toEqual([]);
+      const steps = tools.calls.service.filter((c) => c.startsWith('demo-bot:'));
+      expect(steps.slice(-2)).toEqual(['demo-bot:upgrade-sync', 'demo-bot:cron:cronbot/run.php']);
+    } finally {
+      backups.create = realCreate;
+    }
+  });
+
+  it('keeps stopped bots stopped through an update and schedules cron jobs when a PHP bot starts', async () => {
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    const headers = { cookie, 'x-csrf-token': csrf };
+    const list = (await request('GET', '/api/instances', { headers: { cookie } })).body.instances as Array<{ id: number; slug: string }>;
+    const id = list.find((i) => i.slug === 'demo-bot')?.id as number;
+    const wait = async () => {
+      let inst = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+      for (let i = 0; i < 100 && inst.status === 'provisioning'; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        inst = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+      }
+      return inst;
+    };
+    expect((await request('POST', `/api/instances/${id}/stop`, { headers })).status).toBe(200);
+
+    // Installed before versions were recorded (null) counts as outdated; the old commit cannot be
+    // compared (gone upstream), which must not block the update.
+    db.prepare('UPDATE instances SET source_commit = NULL WHERE id = ?').run(id);
+    removedFilesFails = true;
+    const realCreate = backups.create.bind(backups);
+    backups.create = async () => ({ id: '20261005T000000Z-upgr0002' }) as Awaited<ReturnType<BackupService['create']>>;
+    const cronBefore = tools.calls.service.filter((c) => c === 'demo-bot:cron:cronbot/run.php').length;
+    try {
+      expect((await request('POST', `/api/instances/${id}/upgrade`, { headers })).status).toBe(202);
+      const inst = await wait();
+      expect(inst.last_error).toBeNull();
+      expect(inst.status).toBe('stopped');
+      expect(inst.source_commit).toBe(PROVIDERS.mirza.commit);
+      // A stopped bot's cron timer is not started by the update...
+      expect(tools.calls.service.filter((c) => c === 'demo-bot:cron:cronbot/run.php').length).toBe(cronBefore);
+    } finally {
+      backups.create = realCreate;
+      removedFilesFails = false;
+    }
+    // ...but when the bot is started.
+    expect((await request('POST', `/api/instances/${id}/start`, { headers })).status).toBe(200);
+    expect(tools.calls.service.filter((c) => c === 'demo-bot:cron:cronbot/run.php').length).toBe(cronBefore + 1);
+  });
+
   it('reports real host stats and providers', async () => {
     const { cookie } = await login('viewer', 'Viewer-Password-1');
     const sys = await request('GET', '/api/system', { headers: { cookie } });
@@ -570,10 +785,11 @@ describe('API security', () => {
     expect(sys.body.memory.total_bytes).toBeGreaterThan(0);
     expect(sys.body.instances.running).toBeGreaterThanOrEqual(1);
     const providers = await request('GET', '/api/system/providers', { headers: { cookie } });
-    expect(providers.body.providers.map((p: { id: string }) => p.id)).toEqual(['mirza', 'faoxima', 'pasarguard']);
-    expect(providers.body.providers[2]).toMatchObject({ runtime: 'python', extra_fields: ['api_id', 'api_hash'], web_path: 'webapp/' });
-    // The panel links to the bots' own pages, never the webhook at the site root.
-    expect(providers.body.providers.map((p: { web_path: string }) => p.web_path)).toEqual(['panel/', 'panel/', 'webapp/']);
+    expect(providers.body.providers.map((p: { id: string }) => p.id)).toEqual(['mirza', 'faoxima', 'pasarguard', 'pgclock']);
+    expect(providers.body.providers[2]).toMatchObject({ runtime: 'python', extra_fields: ['api_id', 'api_hash'], web_path: 'webapp/', database: 'mysql', web_login: false });
+    expect(providers.body.providers[3]).toMatchObject({ runtime: 'python', extra_fields: [], database: 'postgres', web_login: true });
+    // The panel links to the bots' own pages, never a PHP bot's webhook at the site root.
+    expect(providers.body.providers.map((p: { web_path: string }) => p.web_path)).toEqual(['panel/', 'panel/', 'webapp/', '']);
     for (const p of providers.body.providers as Array<{ commit: string; version: string }>) {
       expect(p.commit).toMatch(/^[0-9a-f]{40}$/);
       expect(p.version).toBeTruthy();

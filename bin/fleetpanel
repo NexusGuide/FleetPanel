@@ -361,6 +361,17 @@ cmd_doctor() {
   if [[ -n $php ]] && out="$("php-fpm$php" -t 2>&1)"; then pass "php-fpm $php configuration is valid"; else fail "php-fpm configuration is invalid or PHP version unknown: $(printf '%s' "$out" | tail -n 1)"; fi
 
   if mysqladmin --protocol=socket -u root ping >/dev/null 2>&1; then pass "MySQL/MariaDB is reachable"; else fail "MySQL/MariaDB is not reachable over the local socket"; fi
+  # PostgreSQL is installed with the first bot that uses it (PGClockBot).
+  if id -u postgres >/dev/null 2>&1 && command -v psql >/dev/null 2>&1; then
+    out="$(cd / && runuser -u postgres -- psql -X -q -At -d postgres -c 'SHOW listen_addresses' 2>/dev/null || true)"
+    if [[ -z $out ]]; then
+      fail "PostgreSQL is not reachable (systemctl status postgresql)"
+    elif [[ $out == localhost || $out == 127.0.0.1 || $out == '127.0.0.1,::1' || $out == 'localhost,::1' ]]; then
+      pass "PostgreSQL is reachable and listens on loopback only"
+    else
+      warn "PostgreSQL listens on '$out': keep port 5432 closed in the firewall"
+    fi
+  fi
 
   if [[ -f $KEY_FILE ]]; then
     mode="$(stat -c %a "$KEY_FILE")" owner="$(stat -c %U "$KEY_FILE")" size="$(stat -c %s "$KEY_FILE")"

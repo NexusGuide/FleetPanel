@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Archive, ExternalLink, Play, Plus, RotateCcw, Search, Server, Square, Trash2 } from 'lucide-react';
-import { api, instanceWebUrl, type Instance, type InstanceStatus, type Permission } from '../api';
-import { Button, Card, EmptyState, ErrorBanner, Input, PageHeader, Select, Spinner, StatusBadge, Time, cx, useResource } from '../components/ui';
+import { api, instanceWebUrl, isOutdated, type Instance, type InstanceStatus, type Permission, type Provider } from '../api';
+import { Button, Card, EmptyState, ErrorBanner, Input, Notice, PageHeader, Pill, Select, Spinner, StatusBadge, Time, cx, errorText, useResource, useToast } from '../components/ui';
 import { useInstanceActions } from './instanceActions';
 
 const FILTERS: Array<{ id: InstanceStatus | 'all'; label: string }> = [
@@ -132,6 +132,16 @@ export function InstancesPage({
         </div>
       )}
 
+      {providerInfo.data && (
+        <BotUpdates
+          providers={providerInfo.data}
+          instances={instances}
+          canUpdate={can('instances.create')}
+          onUpdate={(insts, version) => void actions.upgrade(insts, version)}
+          onChecked={() => void providerInfo.reload()}
+        />
+      )}
+
       <div className="flex flex-col sm:flex-row gap-2 mb-4">
         <div className="relative flex-1">
           <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -208,13 +218,23 @@ export function InstancesPage({
                           {i.bot_username && ` · @${i.bot_username}`}
                         </span>
                       </button>
-                      {i.status === 'error' && i.last_error && (
-                        <p className="mt-1 text-[11px] text-rose-300/90 line-clamp-2 break-words">{i.last_error}</p>
+                      {i.last_error && (
+                        <p
+                          className={cx(
+                            'mt-1 text-[11px] line-clamp-2 break-words',
+                            i.status === 'error' ? 'text-rose-300/90' : 'text-amber-300/90',
+                          )}
+                        >
+                          {i.last_error}
+                        </p>
                       )}
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell font-mono text-slate-300">{i.provider}</td>
                     <td className="px-4 py-3">
-                      <StatusBadge status={i.status} />
+                      <span className="inline-flex items-center gap-1.5">
+                        <StatusBadge status={i.status} />
+                        {isOutdated(i, providerInfo.data) && <Pill tone="blue">update</Pill>}
+                      </span>
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell text-slate-400">
                       <Time value={i.updated_at} />
@@ -240,6 +260,99 @@ export function InstancesPage({
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+/**
+ * New bot versions: reviewed ones (pinned by this FleetPanel) can be installed on outdated bots, one
+ * by one or all at once; newer upstream releases are only announced until they are reviewed.
+ */
+function BotUpdates({
+  providers,
+  instances,
+  canUpdate,
+  onUpdate,
+  onChecked,
+}: {
+  providers: Provider[];
+  instances: Instance[];
+  canUpdate: boolean;
+  onUpdate: (insts: Instance[], version: string) => void;
+  onChecked: () => void;
+}) {
+  const toast = useToast();
+  const [checking, setChecking] = useState(false);
+  const ready = providers
+    .map((p) => ({ p, outdated: instances.filter((i) => i.provider === p.id && isOutdated(i, providers)) }))
+    .filter((x) => x.outdated.length > 0);
+  const announced = providers.filter((p) => p.upstream?.newer && instances.some((i) => i.provider === p.id));
+
+  const check = async () => {
+    setChecking(true);
+    try {
+      await api.checkUpstream();
+      onChecked();
+      toast.success('Checked the bots for new versions.');
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  if (ready.length === 0 && announced.length === 0) {
+    return canUpdate ? (
+      <div className="mb-3 flex justify-end">
+        <Button size="sm" loading={checking} onClick={() => void check()}>
+          Check for bot updates
+        </Button>
+      </div>
+    ) : null;
+  }
+
+  return (
+    <div className="mb-4 space-y-2">
+      {ready.map(({ p, outdated }) => (
+        <div key={p.id} className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-lg border border-blue-900/60 bg-blue-950/30 text-xs text-blue-100">
+          <span>
+            <b>{p.name} {p.version}</b> is available for {outdated.length === 1 ? outdated[0]?.slug : `${outdated.length} bots`}.
+            <span className="text-blue-200/70"> Reviewed for FleetPanel; data is kept.</span>
+          </span>
+          {canUpdate && (
+            <Button size="sm" variant="primary" onClick={() => onUpdate(outdated, `${p.name} ${p.version}`)}>
+              {outdated.length === 1 ? 'Update' : `Update all ${outdated.length}`}
+            </Button>
+          )}
+        </div>
+      ))}
+      {announced.map((p) => (
+        <Notice key={p.id}>
+          <b>{p.name}</b> published a newer version
+          {p.upstream?.latest ? (
+            <>
+              {' '}
+              (
+              {p.upstream.url ? (
+                <a href={p.upstream.url} target="_blank" rel="noreferrer noopener" className="underline hover:text-white">
+                  {p.upstream.latest}
+                </a>
+              ) : (
+                p.upstream.latest
+              )}
+              )
+            </>
+          ) : null}
+          . It can be installed once it has been reviewed and arrives with a FleetPanel update.
+        </Notice>
+      ))}
+      {canUpdate && (
+        <div className="flex justify-end">
+          <Button size="sm" loading={checking} onClick={() => void check()}>
+            Check for bot updates
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

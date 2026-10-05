@@ -63,7 +63,7 @@ X-CSRF-Token: …
 ```
 
 - `slug`: 3–29 characters, lowercase letters, digits and `-`, starting with a letter
-- `provider`: `mirza`, `faoxima` or `pasarguard`
+- `provider`: `mirza`, `faoxima`, `pasarguard` or `pgclock`
 - `api_id`, `api_hash`: required for `pasarguard` (Telegram API credentials from my.telegram.org)
 - `domain`: must already resolve to the server (a certificate is issued and the webhook uses HTTPS)
 
@@ -71,6 +71,20 @@ The bot token is checked with Telegram first. Duplicates are rejected with a mes
 bot: `409 slug_in_use` (same name, case-insensitive), `409 domain_in_use`, or `409 bot_in_use` (the same
 Telegram bot, even with a new token). The response is `202` with `status: "provisioning"`. Poll
 `GET /api/instances/:id` until `status` is `running`, or `error` with the failing step in `last_error`.
+
+`POST /api/instances/:id/upgrade` (`instances.create`) updates a bot to the version this FleetPanel pins, keeping
+its data; `202`, queued, one bot at a time. `409 up_to_date` when it already runs it. `GET /api/system/providers`
+includes each provider's `upstream` status, its `database` (`mysql` or `postgres`) and `web_login`;
+`POST /api/system/providers/check` refreshes the upstream status.
+
+`GET /api/instances/:id/web-login` (`instances.create`) returns `{ "username": "admin", "password": "…" }`, the
+first login of the bot's own web panel (PGClockBot), and writes `INSTANCE_WEB_LOGIN_VIEW` to the audit log;
+`404 no_web_login` for bots without one. Once the password is changed in the bot's panel, this one no longer
+works.
+
+`POST /api/instances/:id/import-db` (`backups.restore`, raw body up to 512 MB) replaces the bot's database:
+`.sql`, `.sql.gz` or a `.zip` with one `.sql` for MariaDB bots; a `pg_dump` custom-format `.dump` (also
+gzipped) or a `.zip` holding one (the bot's own backup, `data/postgres.dump`) for PostgreSQL bots.
 
 `POST /api/instances/check` takes the same body, changes nothing and returns
 `{ "bot_username": "…", "conflicts": { "slug"?: "…", "domain"?: "…", "bot_token"?: "…" } }`; the create

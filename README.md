@@ -4,7 +4,7 @@
 
 ### A secure control plane for hosting many Telegram bots on one Linux server
 
-Deploy and run isolated **MirzaBot**, **Faoxima** and **PasarguardBot** instances on a single Ubuntu/Debian
+Deploy and run isolated **MirzaBot**, **Faoxima**, **PasarguardBot** and **PGClockBot** instances on a single Ubuntu/Debian
 VPS: each bot gets its own Linux user, MySQL database, nginx site and Let's Encrypt certificate (plus a
 PHP-FPM pool, or a sandboxed systemd service with its own Redis for Python bots), managed from a web panel
 and a CLI.
@@ -22,7 +22,7 @@ and a CLI.
 </div>
 
 > **Status: v0.4 (pre-release).** Web panel, provisioning, CLI and updates are tested on a real
-> Ubuntu 24.04 server with MirzaBot and Faoxima. PasarguardBot support is new in v0.4.0. See the [changelog](CHANGELOG.md) and the [roadmap](#roadmap).
+> Ubuntu 24.04 server with MirzaBot, Faoxima and PasarguardBot. PGClockBot support is new in v0.4.4. See the [changelog](CHANGELOG.md) and the [roadmap](#roadmap).
 
 ---
 
@@ -59,13 +59,15 @@ Every number and state in the panel comes from the server; nothing is simulated.
 - **Dashboard:** instance counts, server CPU load, memory and disk, recent activity
 - **Instances:** a guided create wizard, start, stop, backup, **repair/reprovision**, delete (with a
   pre-delete backup). If an install fails, the panel shows the failing step and the real error.
+- **Bot updates:** new versions of the bots are announced; reviewed ones are installed from the panel,
+  one bot or all of a type at once, keeping each bot's data
 - **Backups:** list, restore (a safety backup is taken first), delete; **import a bot's own database backup**
 - **Settings:** encrypted panel backups to Telegram on a schedule ([disaster recovery](docs/backup.md))
 - **Administrators** (Owner only), **audit log** and **my account** (password, sessions)
 
-Creating a bot: point its domain's DNS at the server, then *New instance* → choose MirzaBot, Faoxima or
-PasarguardBot → domain, bot token from @BotFather and your numeric Telegram id (PasarguardBot also needs an
-API id and hash from [my.telegram.org](https://my.telegram.org)). FleetPanel then downloads the bot's pinned
+Creating a bot: point its domain's DNS at the server, then *New instance* → choose MirzaBot, Faoxima,
+PasarguardBot or PGClockBot → domain, bot token from @BotFather and your numeric Telegram id (PasarguardBot also
+needs an API id and hash from [my.telegram.org](https://my.telegram.org)). FleetPanel then downloads the bot's pinned
 version, writes its config, installs its dependencies and runs its schema setup as the bot's own user,
 creates the database and the nginx site, issues the certificate and connects the bot to Telegram.
 
@@ -74,6 +76,7 @@ creates the database and the nginx site, issues the certificate and connects the
 | MirzaBot | PHP-FPM pool + Telegram webhook | Panels: Marzban, X-UI, S-UI, Hiddify, ... |
 | Faoxima | PHP-FPM pool + Telegram webhook | Panels: Marzban, X-UI |
 | PasarguardBot | Python service (systemd) + its own Redis | Panel: PasarGuard · ~300 MB RAM per bot |
+| PGClockBot | Python service (systemd) + PostgreSQL | Panel: PasarGuard · its own web panel (first login shown in the bot's details) |
 
 ---
 
@@ -240,6 +243,6 @@ Questions, ideas and test reports: [Telegram group](https://t.me/FleetPanelGroup
 
 ## 📄 License
 
-FleetPanel is open-source software licensed under the [MIT License](LICENSE). MirzaBot, Faoxima and
-PasarguardBot are separate projects with their own licenses (PasarguardBot: AGPL-3.0); FleetPanel downloads
-them unmodified from their repositories at install time.
+FleetPanel is open-source software licensed under the [MIT License](LICENSE). MirzaBot, Faoxima,
+PasarguardBot and PGClockBot are separate projects with their own licenses (PasarguardBot: AGPL-3.0,
+PGClockBot: MIT); FleetPanel downloads them unmodified from their repositories at install time.

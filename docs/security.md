@@ -59,6 +59,11 @@ This document maps each control in [SECURITY.md](../SECURITY.md) to the code tha
 
 ## Isolation on the host
 
+Bot updates copy the new code into a bot's folder as the bot's own user (helper `instance-upgrade-sync`),
+from a staging folder only that user may read (ACL); the control plane never writes into a folder the bot
+controls. Only versions reviewed and pinned in a FleetPanel release can be installed; newer upstream
+versions are only announced.
+
 PHP bots' cron jobs run from `fleetpanel-cron-<slug>.timer` as the bot's user, sandboxed
 (`ProtectSystem=strict`, only the bot's folder writable, `NoNewPrivileges`, private `/tmp`). Bot users are
 listed in `/etc/cron.deny`, so a bot cannot install crontab entries of its own; `/cron/` and `/cronbot/` are
@@ -76,7 +81,21 @@ Service bots (PasarguardBot) additionally:
   if it listens anywhere else, and nginx hides the API documentation;
 - get no `www-data` access to their folder (nginx only proxies to them);
 - use toolchains pinned by version and SHA-256 (uv, bun) and lock files with hashes (`uv.lock`,
-  `bun.lock`); dependencies are installed as the bot's user.
+  `bun.lock`); dependencies are installed as the bot's user. A project without a lock file (PGClockBot) is
+  installed from a hash-pinned lock FleetPanel ships (`deploy/locks/`), wheels only.
+
+PostgreSQL (PGClockBot): installed from the distribution with the first bot that uses it and left listening
+on loopback only (`doctor` warns otherwise). Each bot gets a login role with no other privileges
+(`NOSUPERUSER NOCREATEDB NOCREATEROLE`) that owns its own database and its `public` schema; `CONNECT` is
+revoked from `PUBLIC`, so other bots' roles cannot open it. Roles are created as `postgres` over the local
+socket with the password on stdin and statement logging off for that session. The control plane reaches a
+bot's database over TCP on 127.0.0.1 with its password in the environment (`PGPASSWORD`), never in argv.
+Restores and imports use `pg_restore` of custom-format dumps only: plain SQL would need `psql`, which runs
+client-side commands (`\!`) found in its input.
+
+PGClockBot's own web panel gets its first password from FleetPanel (in the root-only environment file; the
+bot stores it as a bcrypt hash on first start), so its first-run wizard is never open on a public domain. It
+runs with `TRUST_PROXY=1` behind nginx, which appends the real client address to `X-Forwarded-For`.
 
 - Each instance has its own Linux user `fp-<slug>` and PHP-FPM pool with
   `open_basedir = <instance dir>:/tmp`, `display_errors off`.
