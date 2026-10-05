@@ -1,7 +1,7 @@
 import type { DB } from './db.js';
 import type { SecretBox } from './security/crypto.js';
 
-export type SecretName = 'bot_token' | 'db_password' | 'webhook_secret' | 'api_id' | 'api_hash';
+export type SecretName = 'bot_token' | 'db_password' | 'webhook_secret' | 'api_id' | 'api_hash' | 'web_password' | 'web_secret';
 
 // Per-instance secrets, encrypted at rest. The AAD binds each ciphertext to its
 // instance and name, so ciphertexts cannot be swapped between rows.

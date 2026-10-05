@@ -58,17 +58,22 @@ export function systemRoutes(d: AppDeps): Router {
   r.get('/providers', (_req, res) => {
     const upstream = d.upstream?.status() ?? {};
     res.json({
-      providers: PROVIDER_IDS.map((id) => ({
-        upstream: upstream[id] ?? null,
-        id,
-        name: PROVIDERS[id].displayName,
-        repo_url: PROVIDERS[id].repoUrl,
-        version: PROVIDERS[id].version,
-        commit: PROVIDERS[id].commit,
-        runtime: PROVIDERS[id].runtime,
-        extra_fields: PROVIDERS[id].extraFields,
-        web_path: PROVIDERS[id].webPath,
-      })),
+      providers: PROVIDER_IDS.map((id) => {
+        const p = PROVIDERS[id];
+        return {
+          upstream: upstream[id] ?? null,
+          id,
+          name: p.displayName,
+          repo_url: p.repoUrl,
+          version: p.version,
+          commit: p.commit,
+          runtime: p.runtime,
+          extra_fields: p.extraFields,
+          web_path: p.webPath,
+          database: p.database,
+          web_login: p.runtime === 'python' && p.webLogin,
+        };
+      }),
     });
   });
 

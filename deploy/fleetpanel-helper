@@ -38,8 +38,13 @@ readonly REDIS_SERVER=/usr/bin/redis-server
 readonly UV_VERSION=0.11.31
 readonly BUN_VERSION=1.4.2
 readonly PYTHON_SERIES=3.14
+# For bots whose own CI pins an older Python (PGClockBot: 3.12); installed next to the default.
+readonly PYTHON_SERIES_EXTRA=3.12
+# Hash-pinned package lock the control plane copies into a bot that has no lock file of its own.
+readonly REQUIREMENTS_LOCK=fleetpanel-requirements.txt
 # Only these keys may appear in a bot's environment: nothing that changes how programs load.
-readonly ENV_KEYS=" BOT_TOKEN API_ID API_HASH ADMIN_ID SQLALCHEMY_DATABASE_URL FASTAPI_PORT REDIS_URL REDIS_NAMESPACE_PREFIX LOG_DIR TELETHON_SESSION_PATH WEBAPP_URL "
+readonly ENV_KEYS=" BOT_TOKEN API_ID API_HASH ADMIN_ID SQLALCHEMY_DATABASE_URL FASTAPI_PORT REDIS_URL REDIS_NAMESPACE_PREFIX LOG_DIR TELETHON_SESSION_PATH WEBAPP_URL BOT_USERNAME ADMIN_IDS DATABASE_URL WEB_HOST WEB_PORT WEB_SECRET WEB_ADMIN_USER WEB_ADMIN_PASSWORD WEBHOOK_URL WEBHOOK_PATH WEBHOOK_SECRET_TOKEN PUBLIC_BASE_URL TRUST_PROXY TRUST_PROXY_HOPS "
+readonly PG_SERVICE=postgresql
 
 die() { echo "fleetpanel-helper: $*" >&2; exit 1; }
 need_args() { [[ $1 -eq $2 ]] || die "expected $2 argument(s), got $1"; }
@@ -333,7 +338,7 @@ require_runtime() {
   [[ -x $RUNTIME_DIR/bin/uv && -x $RUNTIME_DIR/bin/bun && -f $PYRUN ]] || die "the Python runtime is not installed (runtime-python)"
 }
 
-# instance-run SLUG composer | SLUG php SCRIPT.php | SLUG python-deps | SLUG webapp-build | SLUG python-migrate
+# instance-run SLUG composer | SLUG php SCRIPT.php | SLUG python-deps | SLUG python-reqs PYTHON | SLUG webapp-build | SLUG python-migrate
 # Runs a bot's own install steps as the bot's Linux user, never as the control plane:
 # a compromised upstream project or package then only reaches that one bot.
 cmd_instance_run() {
@@ -350,6 +355,17 @@ cmd_instance_run() {
       require_runtime
       # --frozen: exactly the versions (and hashes) in the project's uv.lock.
       cmd=("$RUNTIME_DIR/bin/uv" sync --frozen --no-dev --python "$PYTHON_SERIES")
+      limit=1800
+      ;;
+    python-reqs)
+      need_args $# 3
+      require_runtime
+      [[ $3 == "$PYTHON_SERIES" || $3 == "$PYTHON_SERIES_EXTRA" ]] || die "unsupported Python version"
+      [[ -f $dir/$REQUIREMENTS_LOCK && ! -L $dir/$REQUIREMENTS_LOCK ]] || die "the package lock $REQUIREMENTS_LOCK is missing"
+      # A fresh virtualenv with exactly the versions and hashes FleetPanel ships (deploy/locks), wheels
+      # only: building a source package would fetch unpinned build tools.
+      cmd=(bash -c '"$0" venv --clear --quiet --python "$1" .venv && exec "$0" pip sync --require-hashes --no-build --quiet --python .venv/bin/python "$2"'
+           "$RUNTIME_DIR/bin/uv" "$3" "$REQUIREMENTS_LOCK")
       limit=1800
       ;;
     webapp-build)
@@ -619,9 +635,10 @@ cmd_runtime_python() {
     install -m 0755 "$tmp/bun-linux-$bun_arch/bun" "$RUNTIME_DIR/bin/bun"
   fi
   rm -rf -- "$tmp"
-  # uv checks the interpreter download against the checksums built into this pinned uv release.
+  # uv checks the interpreter downloads against the checksums built into this pinned uv release.
   UV_PYTHON_INSTALL_DIR="$RUNTIME_DIR/python" UV_PYTHON_BIN_DIR="$RUNTIME_DIR/python/bin" UV_NO_CACHE=1 \
-    "$RUNTIME_DIR/bin/uv" python install "$PYTHON_SERIES" >&2 || die "could not install Python $PYTHON_SERIES"
+    "$RUNTIME_DIR/bin/uv" python install "$PYTHON_SERIES" "$PYTHON_SERIES_EXTRA" >&2 \
+    || die "could not install Python $PYTHON_SERIES and $PYTHON_SERIES_EXTRA"
   chmod -R a+rX "$RUNTIME_DIR"
   write_pyrun
 }
@@ -648,15 +665,19 @@ cmd_instance_env() {
   mv -f "$tmp" "$(env_file "$slug")"
 }
 
-# service-create SLUG DOMAIN PORT
-# systemd services for the bot and its Redis (sandboxed, as the bot's user) and an nginx
-# reverse proxy to 127.0.0.1:PORT. Starts (or restarts) the bot.
+# service-create SLUG DOMAIN PORT ENTRY REDIS
+# A systemd service running ENTRY (e.g. main.py) and, when REDIS is "redis", the bot's own Redis,
+# both sandboxed as the bot's user; and an nginx reverse proxy to 127.0.0.1:PORT. Starts (or
+# restarts) the bot.
 cmd_service_create() {
-  need_args $# 3
-  local slug="$1" domain="$2" port="$3" user dir envf vhost link other sub
+  need_args $# 5
+  local slug="$1" domain="$2" port="$3" entry="$4" redis="$5" user dir envf vhost link other sub
+  local after="network-online.target mariadb.service mysql.service $PG_SERVICE.service" requires=""
   check_slug "$slug"
   check_domain "$domain"
   [[ $port =~ $RE_PORT ]] || die "invalid port"
+  [[ $entry =~ ^[a-z][a-z0-9_]{0,31}\.py$ ]] || die "invalid entry script"
+  [[ $redis == redis || $redis == no-redis ]] || die "invalid Redis option"
   user="$(instance_user "$slug")"
   dir="$(instance_dir "$slug")"
   envf="$(env_file "$slug")"
@@ -665,7 +686,7 @@ cmd_service_create() {
   require_instance_dir "$dir"
   require_runtime
   [[ -f $envf ]] || die "the bot's environment is missing (instance-env)"
-  [[ -x $dir/.venv/bin/python && -f $dir/main.py ]] || die "the bot is not installed (python-deps)"
+  [[ -x $dir/.venv/bin/python && -f $dir/$entry && ! -L $dir/$entry ]] || die "the bot is not installed (python-deps)"
   # The control plane created these (instance-perms handed them over); never create or chown
   # paths inside the instance as root here, a symlink planted there could redirect it.
   for sub in workdir logs sessions data/redis; do
@@ -679,7 +700,8 @@ cmd_service_create() {
   other="$(domain_used_by "$domain" "$link")"
   [[ -z $other ]] || die "domain $domain is already served by $other; remove that site or use another domain"
 
-  cat > "$(unit_path "$(redis_unit "$slug")")" <<EOF
+  if [[ $redis == redis ]]; then
+    cat > "$(unit_path "$(redis_unit "$slug")")" <<EOF
 # Managed by FleetPanel. Instance: $slug
 [Unit]
 Description=FleetPanel Redis for $slug
@@ -700,14 +722,21 @@ MemoryMax=256M
 [Install]
 WantedBy=multi-user.target
 EOF
+    chmod 0644 "$(unit_path "$(redis_unit "$slug")")"
+    after+=" $(redis_unit "$slug")"
+    requires="Requires=$(redis_unit "$slug")"
+  else
+    systemctl disable --now "$(redis_unit "$slug")" >/dev/null 2>&1 || true
+    rm -f "$(unit_path "$(redis_unit "$slug")")"
+  fi
 
   cat > "$(unit_path "$(bot_unit "$slug")")" <<EOF
 # Managed by FleetPanel. Instance: $slug
 [Unit]
 Description=FleetPanel bot $slug
 Wants=network-online.target
-After=network-online.target mariadb.service mysql.service $(redis_unit "$slug")
-Requires=$(redis_unit "$slug")
+After=$after
+$requires
 
 [Service]
 User=$user
@@ -715,7 +744,7 @@ Group=$user
 WorkingDirectory=$dir/workdir
 EnvironmentFile=$envf
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
-ExecStart=$dir/.venv/bin/python $PYRUN $dir/main.py
+ExecStart=$dir/.venv/bin/python $PYRUN $dir/$entry
 Restart=always
 RestartSec=5
 NoNewPrivileges=yes
@@ -733,7 +762,7 @@ MemoryMax=1G
 [Install]
 WantedBy=multi-user.target
 EOF
-  chmod 0644 "$(unit_path "$(redis_unit "$slug")")" "$(unit_path "$(bot_unit "$slug")")"
+  chmod 0644 "$(unit_path "$(bot_unit "$slug")")"
 
   cat > "$vhost" <<EOF
 # Managed by FleetPanel. Instance: $slug
@@ -765,7 +794,9 @@ EOF
     die "generated nginx configuration failed validation; nothing was enabled. ${CONFIG_ERROR}"
   fi
   systemctl daemon-reload
-  systemctl enable --now "$(redis_unit "$slug")" >/dev/null 2>&1 || die "Redis for $slug did not start: $(journalctl -u "$(redis_unit "$slug")" -n 5 --no-pager -o cat 2>/dev/null | tr '\n' ' ')"
+  if [[ $redis == redis ]]; then
+    systemctl enable --now "$(redis_unit "$slug")" >/dev/null 2>&1 || die "Redis for $slug did not start: $(journalctl -u "$(redis_unit "$slug")" -n 5 --no-pager -o cat 2>/dev/null | tr '\n' ' ')"
+  fi
   systemctl enable "$(bot_unit "$slug")" >/dev/null 2>&1
   systemctl restart "$(bot_unit "$slug")"
   systemctl reload nginx
@@ -804,12 +835,19 @@ cmd_service_wait() {
   die "the bot did not start; its last log lines are above (journalctl -u $unit)"
 }
 
+# A service bot's systemd units: its Redis first, when it has one.
+service_units() {
+  if [[ -f "$(unit_path "$(redis_unit "$1")")" ]]; then printf '%s\n' "$(redis_unit "$1")"; fi
+  printf '%s\n' "$(bot_unit "$1")"
+}
+
 service_enable() {
-  local slug="$1" vhost link
+  local slug="$1" vhost link units
   vhost="$(vhost_file "$slug")"
   link="$(vhost_link "$slug")"
   [[ -f $vhost && -f "$(unit_path "$(bot_unit "$slug")")" ]] || die "instance is not provisioned"
-  systemctl enable --now "$(redis_unit "$slug")" "$(bot_unit "$slug")" >/dev/null 2>&1 || die "the bot's services did not start (journalctl -u $(bot_unit "$slug"))"
+  mapfile -t units < <(service_units "$slug")
+  systemctl enable --now "${units[@]}" >/dev/null 2>&1 || die "the bot's services did not start (journalctl -u $(bot_unit "$slug"))"
   ln -sfn "$vhost" "$link"
   if ! nginx_ok; then
     rm -f "$link"
@@ -819,9 +857,10 @@ service_enable() {
 }
 
 service_disable() {
-  local slug="$1"
+  local slug="$1" units
   rm -f "$(vhost_link "$slug")"
-  systemctl disable --now "$(bot_unit "$slug")" "$(redis_unit "$slug")" >/dev/null 2>&1 || true
+  mapfile -t units < <(service_units "$slug")
+  systemctl disable --now "${units[@]}" >/dev/null 2>&1 || true
   nginx_ok || die "configuration test failed after disabling. ${CONFIG_ERROR}"
   systemctl reload nginx
 }
@@ -925,16 +964,84 @@ FLUSH PRIVILEGES;
 SQL
 }
 
-# db-drop DB_NAME DB_USER  (idempotent)
+# db-drop DB_NAME DB_USER [mysql|postgres|all]  (idempotent)
+# Removes the bot's database and user from MariaDB and/or PostgreSQL (all: both, if installed).
 cmd_db_drop() {
-  need_args $# 2
-  local db="$1" user="$2"
+  [[ $# -eq 2 || $# -eq 3 ]] || die "expected 2 or 3 arguments, got $#"
+  local db="$1" user="$2" engine="${3:-all}" i
   check_db_ident "$db"
   check_db_ident "$user"
-  mysql --protocol=socket -u root <<SQL
+  [[ $engine == all || $engine == mysql || $engine == postgres ]] || die "invalid database engine"
+  if [[ $engine != postgres ]]; then
+    mysql --protocol=socket -u root <<SQL
 DROP DATABASE IF EXISTS \`$db\`;
 DROP USER IF EXISTS '$user'@'localhost';
 FLUSH PRIVILEGES;
+SQL
+  fi
+  [[ $engine != mysql ]] || return 0
+  pg_installed || return 0
+  if ! pg_ready; then
+    systemctl start "$PG_SERVICE" >/dev/null 2>&1 || true
+    for i in $(seq 1 15); do pg_ready && break; sleep 1; done
+  fi
+  pg_ready || die "PostgreSQL is not running, so $db could not be dropped there (systemctl start $PG_SERVICE)"
+  pg_admin -d postgres <<SQL
+DROP DATABASE IF EXISTS "$db" WITH (FORCE);
+DROP ROLE IF EXISTS "$user";
+SQL
+}
+
+pg_installed() { id -u postgres >/dev/null 2>&1 && command -v psql >/dev/null 2>&1; }
+# From / : postgres cannot read the helper's working directory.
+pg_ready() { (cd / && runuser -u postgres -- psql -X -q -At -d postgres -c 'SELECT 1') >/dev/null 2>&1; }
+# SQL from stdin as the postgres superuser (peer authentication on the local socket, no password).
+pg_admin() { (cd / && runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 "$@") >/dev/null; }
+
+# runtime-postgres
+# Installs PostgreSQL from the distribution once per server, for the bots that use it. It keeps the
+# packaged defaults: listening on loopback only, password (scram) logins over TCP, peer for postgres.
+cmd_runtime_postgres() {
+  need_args $# 0
+  local pkg missing=() i
+  for pkg in postgresql postgresql-client; do
+    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
+  done
+  if (( ${#missing[@]} )); then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y -qq --no-install-recommends "${missing[@]}" >&2 \
+      || { apt-get update -qq >&2 && apt-get install -y -qq --no-install-recommends "${missing[@]}" >&2; } \
+      || die "could not install: ${missing[*]}"
+  fi
+  systemctl enable --now "$PG_SERVICE" >/dev/null 2>&1 || die "PostgreSQL did not start (journalctl -u $PG_SERVICE)"
+  for i in $(seq 1 30); do pg_ready && return 0; sleep 1; done
+  die "PostgreSQL is not answering on its local socket (journalctl -u $PG_SERVICE)"
+}
+
+# pg-create DB_NAME DB_USER   (stdin: password)  (idempotent, rotates the password)
+# A login role that owns only its own database; other roles (other bots) cannot even connect to it.
+cmd_pg_create() {
+  need_args $# 2
+  local db="$1" user="$2" password
+  check_db_ident "$db"
+  check_db_ident "$user"
+  password="$(read_stdin_value)"
+  [[ $password =~ $RE_DB_PASSWORD ]] || die "invalid database password"
+  pg_ready || die "PostgreSQL is not running (runtime-postgres)"
+  # A failing statement must not land in the server log with the password in it.
+  pg_admin -d postgres <<SQL
+SET log_min_error_statement = panic;
+SET log_statement = 'none';
+SELECT format('CREATE ROLE %I', '$user') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$user')\gexec
+ALTER ROLE "$user" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$password';
+SELECT format('CREATE DATABASE %I OWNER %I ENCODING %L TEMPLATE template0', '$db', '$user', 'UTF8') WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '$db')\gexec
+ALTER DATABASE "$db" OWNER TO "$user";
+REVOKE ALL ON DATABASE "$db" FROM PUBLIC;
+SQL
+  # The bot's role owns its schema, so a restore can start from an empty one (DROP SCHEMA public).
+  pg_admin -d "$db" <<SQL
+ALTER SCHEMA public OWNER TO "$user";
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
 SQL
 }
 
@@ -969,6 +1076,8 @@ main() {
     instance-remove)  cmd_instance_remove "$@" ;;
     db-create)        cmd_db_create "$@" ;;
     db-drop)          cmd_db_drop "$@" ;;
+    pg-create)        cmd_pg_create "$@" ;;
+    runtime-postgres) cmd_runtime_postgres "$@" ;;
     cert-issue)       cmd_cert_issue "$@" ;;
     runtime-python)   cmd_runtime_python "$@" ;;
     instance-env)     cmd_instance_env "$@" ;;

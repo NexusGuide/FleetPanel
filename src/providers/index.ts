@@ -1,6 +1,8 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { phpString } from '../security/php.js';
 
-export const PROVIDER_IDS = ['mirza', 'faoxima', 'pasarguard'] as const;
+export const PROVIDER_IDS = ['mirza', 'faoxima', 'pasarguard', 'pgclock'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export interface ProviderContext {
@@ -20,6 +22,9 @@ export interface ProviderContext {
   apiHash?: string;
   /** Loopback port of the bot's own web server (service providers). */
   appPort?: number;
+  /** First password of the bot's own web panel, and the key it signs its sessions with (providers with webLogin). */
+  webPassword?: string;
+  webSecret?: string;
 }
 
 /** Inputs a provider needs on top of the common ones (bot token, admin id, domain). */
@@ -32,6 +37,9 @@ export type ExtraField = 'api_id' | 'api_hash';
  * - query:  ?secret=… in the webhook URL
  */
 export type WebhookAuth = 'header' | 'query';
+
+/** Each bot gets its own database and user on the server's MariaDB, or on PostgreSQL (installed on first use). */
+export type DbEngine = 'mysql' | 'postgres';
 
 interface ProviderBase {
   id: ProviderId;
@@ -48,6 +56,7 @@ interface ProviderBase {
   /** How the upstream publishes versions: GitHub releases, or commits to a branch. */
   track: { kind: 'release' } | { kind: 'branch'; branch: string };
   extraFields: ExtraField[];
+  database: DbEngine;
   /**
    * The bot's own web page the panel links to. Not the site root: for the PHP bots that is the
    * Telegram webhook, which nginx answers with 403 unless the request carries the secret.
@@ -84,6 +93,22 @@ export interface PhpProvider extends ProviderBase {
  */
 export interface PythonProvider extends ProviderBase {
   runtime: 'python';
+  /** The script systemd starts (relative to the instance directory). */
+  entry: string;
+  /** Whether the bot needs its own Redis (a second service on a Unix socket). */
+  redis: boolean;
+  /**
+   * How its Python packages are installed, always at exact versions with checked hashes:
+   * - uv-lock: the project's own uv.lock (uv sync --frozen);
+   * - requirements: a hash-pinned lock FleetPanel ships in deploy/locks (the project has only ranges).
+   */
+  deps: { kind: 'uv-lock' } | { kind: 'requirements'; lockFile: string; python: string };
+  /** Whether a web app in frontend/ is built with bun. */
+  webappBuild: boolean;
+  /** Empty .env files the bot insists on (its settings come from the service environment). */
+  envPlaceholders: string[];
+  /** The bot has its own web panel with a login; FleetPanel sets the first password and shows it. */
+  webLogin: boolean;
   /**
    * Project files the bot reads relative to its working directory. The service runs in a separate
    * working directory (downloads land there, not over the code), so these are copied into it.
@@ -99,6 +124,20 @@ export type BotProvider = PhpProvider | PythonProvider;
 
 /** First loopback port for service bots; an instance uses APP_PORT_BASE + its id. */
 export const APP_PORT_BASE = 20000;
+
+/** Where a bot's Python packages lock is copied inside its instance directory (read by the helper). */
+export const REQUIREMENTS_LOCK = 'fleetpanel-requirements.txt';
+
+/** deploy/locks/<file> in the FleetPanel tree (same relative path from src/providers and dist/providers). */
+export function lockFilePath(file: string): string {
+  if (!/^[a-z0-9-]+\.txt$/.test(file)) throw new Error('invalid lock file name');
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'locks', file);
+}
+
+/** The helper's instance-run task (and its argument) that installs a Python bot's packages. */
+export function depsTask(provider: PythonProvider): { task: 'python-deps' | 'python-reqs'; arg?: string } {
+  return provider.deps.kind === 'uv-lock' ? { task: 'python-deps' } : { task: 'python-reqs', arg: provider.deps.python };
+}
 
 function required(value: string | undefined, name: string): string {
   if (!value) throw new Error(`${name} is missing`);
@@ -161,6 +200,7 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     version: 'main @ 2026-10-02',
     track: { kind: 'branch', branch: 'main' },
     extraFields: [],
+    database: 'mysql',
     webPath: 'panel/',
     runtime: 'php',
     webhookPath: 'index.php',
@@ -197,6 +237,7 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     version: 'v1.1.5',
     track: { kind: 'release' },
     extraFields: [],
+    database: 'mysql',
     webPath: 'panel/',
     runtime: 'php',
     webhookPath: 'index.php',
@@ -237,10 +278,18 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     track: { kind: 'release' },
     // Telethon logs in over MTProto, which needs an API id/hash besides the bot token.
     extraFields: ['api_id', 'api_hash'],
+    database: 'mysql',
     webPath: 'webapp/',
     // app/version.py reads Path("pyproject.toml") when the package metadata is missing.
     workdirFiles: ['pyproject.toml'],
     runtime: 'python',
+    entry: 'main.py',
+    redis: true,
+    deps: { kind: 'uv-lock' },
+    webappBuild: true,
+    // python-decouple's RepositoryEnv(".env") refuses to start without the file.
+    envPlaceholders: ['.env', 'workdir/.env'],
+    webLogin: false,
     renderEnv: (c) => ({
       BOT_TOKEN: c.botToken,
       API_ID: required(c.apiId, 'API id'),
@@ -256,6 +305,52 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
       WEBAPP_URL: `https://${c.domain}/webapp`,
     }),
     // Alembic records the applied revision once the schema exists.
+    readyCheckSql: () => 'SELECT COUNT(*) FROM alembic_version;',
+  },
+  pgclock: {
+    id: 'pgclock',
+    displayName: 'PGClockBot',
+    repoUrl: 'https://github.com/Mrclocks/PGClockBot.git',
+    commit: 'f889beef1ae45fb23642f75f1874690b9d5e6ec7',
+    version: 'v0.1.9',
+    track: { kind: 'release' },
+    // The PasarGuard panel address and login are entered in the bot's own web panel.
+    extraFields: [],
+    // Its installer provisions PostgreSQL; SQLite is only used by its tests.
+    database: 'postgres',
+    webPath: '',
+    workdirFiles: [],
+    runtime: 'python',
+    entry: 'run.py',
+    redis: false,
+    // Its CI runs on Python 3.12; requirements.txt has only version ranges.
+    deps: { kind: 'requirements', lockFile: 'pgclock.txt', python: '3.12' },
+    webappBuild: false,
+    // It keeps what is edited in its web panel (PasarGuard login, ...) in .env and data/, which
+    // FleetPanel never overwrites. The values below come from the environment and win over .env.
+    envPlaceholders: [],
+    webLogin: true,
+    renderEnv: (c) => ({
+      BOT_TOKEN: c.botToken,
+      BOT_USERNAME: c.botUsername,
+      ADMIN_IDS: checkedId(c.adminTelegramId),
+      // TCP on loopback with a password: the database role is not the bot's Linux user (no peer auth).
+      DATABASE_URL: `postgresql+asyncpg://${c.dbUser}:${c.dbPassword}@127.0.0.1:5432/${c.dbName}`,
+      WEB_HOST: '127.0.0.1',
+      WEB_PORT: required(c.appPort ? String(c.appPort) : undefined, 'app port'),
+      WEB_SECRET: required(c.webSecret, 'web secret'),
+      // Copied into data/web_admin.json (bcrypt) on first start; a password changed in its panel wins.
+      WEB_ADMIN_USER: 'admin',
+      WEB_ADMIN_PASSWORD: required(c.webPassword, 'web password'),
+      WEBHOOK_URL: `https://${c.domain}`,
+      WEBHOOK_PATH: '/telegram/webhook',
+      // The bot registers its webhook itself and checks this secret_token header.
+      WEBHOOK_SECRET_TOKEN: checkedSecret(c.webhookSecret),
+      PUBLIC_BASE_URL: `https://${c.domain}`,
+      // Behind nginx: client addresses (login limits, the first-run check) come from X-Forwarded-For.
+      TRUST_PROXY: '1',
+      TRUST_PROXY_HOPS: '1',
+    }),
     readyCheckSql: () => 'SELECT COUNT(*) FROM alembic_version;',
   },
 };

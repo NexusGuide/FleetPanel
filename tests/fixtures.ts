@@ -40,6 +40,14 @@ export const clonedCommits: string[] = [];
 export async function fakeClone(url: string, commit: string, dest: string): Promise<void> {
   if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`invalid pinned commit '${commit}'`);
   clonedCommits.push(commit);
+  if (url.includes('PGClockBot')) {
+    // A Python project with only version ranges (requirements.txt) and run.py as its entry point.
+    fs.mkdirSync(path.join(dest, 'app'), { recursive: true });
+    fs.writeFileSync(path.join(dest, 'run.py'), 'from app.main import main\n');
+    fs.writeFileSync(path.join(dest, 'requirements.txt'), 'aiogram>=3.15,<4\n');
+    fs.writeFileSync(path.join(dest, 'alembic.ini'), '[alembic]\n');
+    return;
+  }
   if (url.includes('PasarguardBot')) {
     // A Python project: no config template or installer, an Alembic schema and a web app.
     fs.mkdirSync(path.join(dest, 'frontend'), { recursive: true });
@@ -75,6 +83,9 @@ export function fakeRunner(calls: ToolCalls, instancesDir: () => string) {
     async prepareRuntime(): Promise<void> {
       calls.service.push('runtime');
     },
+    async preparePostgres(): Promise<void> {
+      calls.service.push('postgres');
+    },
     /** Same effect as the helper's instance-upgrade-sync (which runs as the bot's user). */
     async upgradeSync(slug: string, staging: string, removed: string[]): Promise<void> {
       calls.service.push(`${slug}:upgrade-sync`);
@@ -88,11 +99,11 @@ export function fakeRunner(calls: ToolCalls, instancesDir: () => string) {
     async writeEnv(slug: string, env: string): Promise<void> {
       calls.env[slug] = env;
     },
-    async runTask(slug: string, task: string): Promise<void> {
-      calls.service.push(`${slug}:${task}`);
+    async runTask(slug: string, task: string, arg?: string): Promise<void> {
+      calls.service.push(arg === undefined ? `${slug}:${task}` : `${slug}:${task}:${arg}`);
     },
-    async createService(slug: string, domain: string, port: number): Promise<void> {
-      calls.service.push(`${slug}:service:${domain}:${port}`);
+    async createService(slug: string, domain: string, port: number, entry: string, redis: boolean): Promise<void> {
+      calls.service.push(`${slug}:service:${domain}:${port}:${entry}:${redis ? 'redis' : 'no-redis'}`);
     },
     async waitForService(slug: string, port: number): Promise<void> {
       calls.service.push(`${slug}:wait:${port}`);
@@ -104,24 +115,28 @@ export interface ToolCalls {
   composer: string[];
   php: string[];
   sql: string[];
+  /** Database engine of each sql() call, in order. */
+  sqlEngines: string[];
   /** Service-bot helper calls in order ("runtime", "slug:task", "slug:service:domain:port", ...). */
   service: string[];
   env: Record<string, string>;
-  /** Contents of each imported (sanitized) dump. */
+  /** Contents of each imported (sanitized) dump, prefixed with the engine ("postgres:..."). */
   imports: string[];
 }
 
-export const newToolCalls = (): ToolCalls => ({ composer: [], php: [], sql: [], service: [], env: {}, imports: [] });
+export const newToolCalls = (): ToolCalls => ({ composer: [], php: [], sql: [], sqlEngines: [], service: [], env: {}, imports: [] });
 
 export function fakeToolchain(calls: ToolCalls = newToolCalls()): Toolchain & { calls: ToolCalls } {
   return {
     calls,
-    async sql(_db, sql) {
+    async sql(db, sql) {
       calls.sql.push(sql);
+      calls.sqlEngines.push(db.engine ?? 'mysql');
       return '1\n';
     },
-    async importDump(_db, file) {
-      calls.imports.push(fs.readFileSync(file, 'utf8'));
+    async importDump(db, file) {
+      const text = fs.readFileSync(file, 'utf8');
+      calls.imports.push(db.engine === 'postgres' ? `postgres:${text}` : text);
     },
   };
 }

@@ -63,6 +63,12 @@ export function instanceRoutes(d: AppDeps): Router {
     res.status(202).json({ instance: d.instances.upgrade(intParam(req, 'id'), actorOf(req)) });
   });
 
+  // First login of the bot's own web panel (PGClockBot). Each view is audited.
+  r.get('/:id/web-login', requirePermission('instances.create', d.audit), sensitive, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(d.instances.webLogin(intParam(req, 'id'), actorOf(req)));
+  });
+
   r.post('/:id/reprovision', requirePermission('instances.create', d.audit), sensitive, (req, res) => {
     res.status(202).json({ instance: d.instances.reprovision(intParam(req, 'id'), actorOf(req)) });
   });

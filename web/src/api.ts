@@ -107,6 +107,10 @@ export interface Provider {
   extra_fields: Array<'api_id' | 'api_hash'>;
   /** The bot's own web page, relative to its domain (e.g. "panel/"). */
   web_path: string;
+  /** Database engine of its bots (PostgreSQL is installed with the first bot that needs it). */
+  database: 'mysql' | 'postgres';
+  /** Its web panel has a login whose first password FleetPanel sets (api.webLogin). */
+  web_login: boolean;
   /** What the bot's own project published (checked every 6 hours); null before the first check. */
   upstream: {
     checked_at: string;
@@ -347,6 +351,7 @@ export const api = {
   upgradeInstance: (id: number) =>
     request<{ instance: Instance }>('POST', `/api/instances/${id}/upgrade`).then((r) => r.instance),
   checkUpstream: () => request<{ ok: true }>('POST', '/api/system/providers/check'),
+  webLogin: (id: number) => request<{ username: string; password: string }>('GET', `/api/instances/${id}/web-login`),
   reprovision: (id: number) =>
     request<{ instance: Instance }>('POST', `/api/instances/${id}/reprovision`).then((r) => r.instance),
   deleteInstance: (id: number, withBackup: boolean) =>

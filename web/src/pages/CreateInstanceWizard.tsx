@@ -198,7 +198,11 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
                   {p.version} · {p.commit.slice(0, 12)}
                 </span>
                 {p.runtime === 'python' && (
-                  <span className="block text-[11px] text-amber-300/80 mt-1">Python service · uses ~300 MB RAM · needs an API id/hash</span>
+                  <span className="block text-[11px] text-amber-300/80 mt-1">
+                    Python service · uses ~300 MB RAM
+                    {p.extra_fields.includes('api_id') && ' · needs an API id/hash'}
+                    {p.database === 'postgres' && ' · PostgreSQL'}
+                  </span>
                 )}
               </button>
             ))}
@@ -324,7 +328,7 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
               ['Bot token', `${form.bot_token.trim().split(':')[0]}:••••••`],
               ['Admin Telegram ID', form.admin_telegram_id.trim()],
               ...(needs.includes('api_id') ? [['Telegram API ID', (form.api_id ?? '').trim()]] : []),
-              ['Database', `fp_${form.slug.replace(/-/g, '_')}`],
+              ['Database', `fp_${form.slug.replace(/-/g, '_')}${provider?.database === 'postgres' ? ' (PostgreSQL)' : ''}`],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-4 px-3 py-2">
                 <dt className="text-slate-500">{k}</dt>
@@ -336,7 +340,11 @@ export function CreateInstanceWizard({ onClose, onCreated }: { onClose: () => vo
             <b className="font-mono">{form.domain.trim().toLowerCase()}</b> must point to this server and port 80 must be open.
           </Notice>
           {provider?.runtime === 'python' && (
-            <Notice tone="info">The first {providerName} on this server also installs Python and takes a few minutes longer.</Notice>
+            <Notice tone="info">
+              The first {providerName} on this server also installs Python
+              {provider.database === 'postgres' ? ' and PostgreSQL' : ''} and takes a few minutes longer.
+              {provider.web_login && ' Its web panel login is shown in the bot details once it is installed.'}
+            </Notice>
           )}
           {submitError && <ErrorBanner error={submitError} />}
         </div>

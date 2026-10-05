@@ -75,6 +75,9 @@ A Python service bot (PasarguardBot) replaces steps 2, 3, 6 and 7 with: prepare 
 `bun`, `alembic upgrade head` (each as the bot's user), and in step 8 creates its Redis and bot systemd
 services plus an nginx reverse proxy instead of a PHP pool; step 10 deletes any old webhook and waits until
 the bot answers on its loopback port. See [providers.md](providers.md#python-service-bots-pasarguardbot).
+PGClockBot does the same on PostgreSQL (installed once, helper `runtime-postgres`, then `pg-create`), without
+Redis or a web-app build, installing its packages from FleetPanel's hash-pinned lock; see
+[providers.md](providers.md#pgclockbot-postgresql).
 
 Only one long-running operation may run per instance at a time; anything interrupted by a restart is
 marked `error` at boot instead of being left in a misleading state.

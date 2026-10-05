@@ -1,24 +1,19 @@
 import { existsSync, readdirSync, rmSync } from 'node:fs';
-
-function readdirSafe(dir: string): string[] {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
-}
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { DB } from '../db.js';
 import type { ActorRef, AuditLog } from '../audit.js';
 import type { SecretStore } from '../secrets.js';
 import type { PrivilegedOps } from '../system/helper.js';
-import type { Toolchain } from '../system/toolchain.js';
+import type { DbCredentials, Toolchain } from '../system/toolchain.js';
 import type { TelegramClient } from './telegram.js';
 import type { BackupRow, BackupService } from './backups.js';
 import {
   APP_PORT_BASE,
   PROVIDERS,
+  REQUIREMENTS_LOCK,
+  depsTask,
+  lockFilePath,
   type BotProvider,
   type PhpProvider,
   type ProviderContext,
@@ -29,7 +24,7 @@ import { SLUG_RE, type CreateInstanceInput } from '../security/validation.js';
 import { generatePassword, randomToken } from '../security/crypto.js';
 import { HttpError, errorMessage } from '../errors.js';
 import { maskSecrets } from '../security/mask.js';
-import { prepareDump, saveUpload } from './dbImport.js';
+import { prepareDump, preparePgDump, saveUpload } from './dbImport.js';
 import type { Readable } from 'node:stream';
 import { log } from '../log.js';
 
@@ -92,11 +87,41 @@ const SERVICE_DIRS = ['workdir', 'logs', 'sessions', 'data/redis'];
 
 /**
  * Some bots (python-decouple with RepositoryEnv(".env")) refuse to start without a .env file in their
- * working directory, although real environment variables win over it. These stay empty: the secrets
- * live in the root-only environment file, so the bot's own backups (which zip .env) carry none.
+ * working directory, although real environment variables win over it (provider.envPlaceholders).
+ * These stay empty: the secrets live in the root-only environment file, so the bot's own backups
+ * (which zip .env) carry none.
  */
-const ENV_PLACEHOLDERS = ['.env', 'workdir/.env'];
 const ENV_PLACEHOLDER_TEXT = '# Managed by FleetPanel: settings come from the service environment, not this file.\n';
+
+function readdirSafe(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * First password of a bot's own web panel: 4 groups of 5 letters/digits, which also meets the bots'
+ * own password rules (2+ digits, upper- and lowercase letters, a special character).
+ */
+export function webPanelPassword(): string {
+  for (;;) {
+    const pw = [0, 1, 2, 3].map(() => generatePassword(5)).join('-');
+    if ((pw.match(/\d/g)?.length ?? 0) >= 2 && (pw.match(/[A-Z]/g)?.length ?? 0) >= 2 && (pw.match(/[a-z]/g)?.length ?? 0) >= 2) return pw;
+  }
+}
+
+/** Copies the project files and FleetPanel's package lock a Python bot needs into its (staged) directory. */
+async function addPythonFiles(provider: PythonProvider, dir: string): Promise<void> {
+  for (const rel of SERVICE_DIRS) await fs.mkdir(path.join(dir, rel), { recursive: true });
+  for (const rel of provider.envPlaceholders) await fs.writeFile(path.join(dir, rel), ENV_PLACEHOLDER_TEXT);
+  for (const rel of provider.workdirFiles) {
+    if (rel.includes('/') || rel.startsWith('.')) throw new Error(`invalid working-directory file ${rel}`);
+    await fs.copyFile(path.join(dir, rel), path.join(dir, 'workdir', rel));
+  }
+  if (provider.deps.kind === 'requirements') await fs.copyFile(lockFilePath(provider.deps.lockFile), path.join(dir, REQUIREMENTS_LOCK));
+}
 
 /** KEY=value lines for the helper's instance-env command. */
 function envFile(env: Record<string, string>): string {
@@ -266,8 +291,13 @@ export class InstanceService {
     this.d.secrets.put(id, 'webhook_secret', randomToken(32));
     if (input.api_id) this.d.secrets.put(id, 'api_id', input.api_id);
     if (input.api_hash) this.d.secrets.put(id, 'api_hash', input.api_hash);
-    if (PROVIDERS[input.provider].runtime === 'python') {
+    const provider = PROVIDERS[input.provider];
+    if (provider.runtime === 'python') {
       this.d.db.prepare('UPDATE instances SET app_port = ? WHERE id = ?').run(APP_PORT_BASE + id, id);
+      if (provider.webLogin) {
+        this.d.secrets.put(id, 'web_password', webPanelPassword());
+        this.d.secrets.put(id, 'web_secret', randomToken(32));
+      }
     }
     this.d.audit.write({
       actor,
@@ -342,10 +372,12 @@ export class InstanceService {
       touched = true;
       await step('Stopping the bot', () => this.d.ops.disableInstance(inst.slug));
       await step('Installing the new version', () => this.d.ops.upgradeSync(inst.slug, dir, removed));
+      // Not needed any more; removed now so the bot is free as soon as its status says so.
+      await fs.rm(dir, { recursive: true, force: true });
+      staging = null;
       await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));
       if (provider.runtime === 'python') {
-        await step('Installing Python dependencies (uv sync)', () => this.d.ops.runTask(inst.slug, 'python-deps'));
-        await step('Building the web app', () => this.d.ops.runTask(inst.slug, 'webapp-build'));
+        await this.installPython(inst, provider);
         await step('Updating database tables (alembic)', () => this.d.ops.runTask(inst.slug, 'python-migrate'));
       } else {
         if (!shipsVendor && (await exists(path.join(ctx.instanceDir, 'composer.json')))) {
@@ -404,9 +436,7 @@ export class InstanceService {
    */
   private async prepareStaging(provider: BotProvider, ctx: ProviderContext, staging: string): Promise<void> {
     if (provider.runtime === 'python') {
-      for (const rel of SERVICE_DIRS) await fs.mkdir(path.join(staging, rel), { recursive: true });
-      for (const rel of ENV_PLACEHOLDERS) await fs.writeFile(path.join(staging, rel), ENV_PLACEHOLDER_TEXT);
-      for (const rel of provider.workdirFiles) await fs.copyFile(path.join(staging, rel), path.join(staging, 'workdir', rel));
+      await addPythonFiles(provider, staging);
       return;
     }
     const configPath = path.join(staging, provider.configFile);
@@ -481,7 +511,35 @@ export class InstanceService {
       apiId: this.d.secrets.find(inst.id, 'api_id'),
       apiHash: this.d.secrets.find(inst.id, 'api_hash'),
       appPort: inst.app_port ?? undefined,
+      webPassword: this.d.secrets.find(inst.id, 'web_password'),
+      webSecret: this.d.secrets.find(inst.id, 'web_secret'),
     };
+  }
+
+  /** The bot's own database, on the engine its provider uses. */
+  private dbFor(inst: InstanceRow, ctx: ProviderContext): DbCredentials {
+    return { engine: PROVIDERS[inst.provider].database, dbName: inst.db_name, dbUser: inst.db_user, password: ctx.dbPassword };
+  }
+
+  /** Python packages (exact, hash-checked versions) and, for bots with one, the web app build. */
+  private async installPython(inst: InstanceRow, provider: PythonProvider): Promise<void> {
+    const deps = depsTask(provider);
+    const how = deps.task === 'python-deps' ? 'uv sync' : `Python ${deps.arg}`;
+    await step(`Installing Python dependencies (${how})`, () => this.d.ops.runTask(inst.slug, deps.task, deps.arg));
+    if (provider.webappBuild) await step('Building the web app', () => this.d.ops.runTask(inst.slug, 'webapp-build'));
+  }
+
+  /**
+   * The first login of a bot's own web panel (bots whose provider has webLogin). The bot keeps its
+   * own copy: once changed in its panel, this one no longer works.
+   */
+  webLogin(id: number, actor: ActorRef): { username: string; password: string } {
+    const inst = this.get(id);
+    const provider = PROVIDERS[inst.provider];
+    const password = provider.runtime === 'python' && provider.webLogin ? this.d.secrets.find(id, 'web_password') : undefined;
+    if (!password) throw new HttpError(404, 'no_web_login', `${provider.displayName} has no web panel login managed by FleetPanel.`);
+    this.d.audit.write({ actor, action: 'INSTANCE_WEB_LOGIN_VIEW', resource: 'instance', resourceId: id, status: 'SUCCESS', metadata: { slug: inst.slug } });
+    return { username: 'admin', password };
   }
 
   /**
@@ -498,15 +556,15 @@ export class InstanceService {
     const work = await this.d.backups.workDir('import');
     let safetyId: string | null = null;
     try {
+      const provider = PROVIDERS[inst.provider];
       const uploadFile = path.join(work, 'upload');
       await saveUpload(upload, uploadFile);
-      const dump = await prepareDump(uploadFile, work);
+      const dump = provider.database === 'postgres' ? await preparePgDump(uploadFile, work) : await prepareDump(uploadFile, work);
       await fs.rm(uploadFile, { force: true });
 
       safetyId = (await this.d.backups.create(inst, 'pre-restore', actor)).id;
-      const provider = PROVIDERS[inst.provider];
       const ctx = this.contextFor(inst);
-      const db = { dbName: inst.db_name, dbUser: inst.db_user, password: ctx.dbPassword };
+      const db = this.dbFor(inst, ctx);
       await this.d.ops.disableInstance(inst.slug);
       try {
         await step('Importing the database', () => this.d.tools.importDump(db, dump));
@@ -607,32 +665,31 @@ export class InstanceService {
     const dir = ctx.instanceDir;
     const port = inst.app_port;
     if (port === null) throw new Error('No application port was assigned to this instance');
-    const db = { dbName: inst.db_name, dbUser: inst.db_user, password: ctx.dbPassword };
+    const db = this.dbFor(inst, ctx);
 
-    await step('Creating the MySQL database', () => this.d.ops.createDatabase(inst.db_name, inst.db_user, ctx.dbPassword));
+    if (provider.database === 'postgres') {
+      await step('Preparing PostgreSQL (the first bot takes a minute)', () => this.d.ops.preparePostgres());
+      await step('Creating the PostgreSQL database', () => this.d.ops.createDatabase(inst.db_name, inst.db_user, ctx.dbPassword, 'postgres'));
+    } else {
+      await step('Creating the MySQL database', () => this.d.ops.createDatabase(inst.db_name, inst.db_user, ctx.dbPassword));
+    }
     await step('Preparing the Python runtime (the first bot takes a few minutes)', () => this.d.ops.prepareRuntime());
     await step('Writing the bot configuration', async () => {
       await this.d.ops.writeEnv(inst.slug, envFile(provider.renderEnv(ctx)));
-      for (const rel of SERVICE_DIRS) await fs.mkdir(path.join(dir, rel), { recursive: true });
-      for (const rel of ENV_PLACEHOLDERS) await fs.writeFile(path.join(dir, rel), ENV_PLACEHOLDER_TEXT);
-      for (const rel of provider.workdirFiles) {
-        if (rel.includes('/') || rel.startsWith('.')) throw new Error(`invalid working-directory file ${rel}`);
-        await fs.copyFile(path.join(dir, rel), path.join(dir, 'workdir', rel));
-      }
+      await addPythonFiles(provider, dir);
     });
     // Everything below runs the bot's own code: as its Linux user, never as the control plane.
     await step('Setting file permissions', () => this.d.ops.fixPermissions(inst.slug));
-    await step('Installing Python dependencies (uv sync)', () => this.d.ops.runTask(inst.slug, 'python-deps'));
-    await step('Building the web app', () => this.d.ops.runTask(inst.slug, 'webapp-build'));
+    await this.installPython(inst, provider);
     await step('Creating database tables (alembic)', () => this.d.ops.runTask(inst.slug, 'python-migrate'));
     await step('Checking the database', async () => {
       const out = (await this.d.tools.sql(db, provider.readyCheckSql(ctx))).trim();
       if (!(Number.parseInt(out, 10) > 0)) throw new Error('the database schema was not created as expected');
     });
-    // The bot talks to Telegram over MTProto; a webhook left over from another bot would keep
-    // Bot API updates queued for nobody.
+    // PasarguardBot talks to Telegram over MTProto: a webhook left over from another bot would keep Bot
+    // API updates queued for nobody. Bots that use one (PGClockBot) register their own when they start.
     await step('Clearing an old Telegram webhook', () => this.d.telegram.deleteWebhook(ctx.botToken));
-    await step('Creating the bot service and nginx site', () => this.d.ops.createService(inst.slug, inst.domain, port));
+    await step('Creating the bot service and nginx site', () => this.d.ops.createService(inst.slug, inst.domain, port, provider.entry, provider.redis));
     await step('Issuing the TLS certificate', () => this.d.ops.issueCertificate(inst.domain));
     await step('Starting the bot', () => this.d.ops.waitForService(inst.slug, port));
   }
@@ -702,7 +759,7 @@ export class InstanceService {
       }
       try {
         await this.d.ops.removeInstance(inst.slug);
-        await this.d.ops.dropDatabase(inst.db_name, inst.db_user);
+        await this.d.ops.dropDatabase(inst.db_name, inst.db_user, PROVIDERS[inst.provider].database);
       } catch (err) {
         this.setStatus(id, 'error', `Delete failed: ${errorMessage(err)}`);
         this.auditFailure(actor, 'INSTANCE_DELETE', id, err);

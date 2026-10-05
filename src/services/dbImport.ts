@@ -8,6 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import { HttpError } from '../errors.js';
 import { run } from '../system/exec.js';
+import { isPgCustomDump } from '../system/toolchain.js';
 
 /** Largest database backup the panel accepts (the panel's nginx site allows the same). */
 export const MAX_IMPORT_BYTES = 512 * 1024 * 1024;
@@ -82,6 +83,69 @@ async function zipEntry(zip: string): Promise<string> {
   if (sql.length === 0) throw new HttpError(400, 'no_sql_in_zip', 'The zip contains no .sql file.');
   if (sql.length > 1) throw new HttpError(400, 'several_sql_in_zip', `The zip contains several .sql files (${sql.slice(0, 5).join(', ')}); upload just one.`);
   return sql[0] as string;
+}
+
+/** Copies a stream to a file, refusing more than MAX_DUMP_BYTES (decompressed archives). */
+async function writeCapped(input: Readable, output: string): Promise<void> {
+  let size = 0;
+  const limit = new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      size += chunk.length;
+      if (size > MAX_DUMP_BYTES) done(new HttpError(413, 'dump_too_large', 'The database dump is larger than 4 GB.'));
+      else done(null, chunk);
+    },
+  });
+  await pipeline(input, limit, createWriteStream(output, { mode: 0o600 }));
+}
+
+const NOT_PG_DUMP =
+  'This bot uses PostgreSQL: upload a pg_dump custom-format file (.dump, made with pg_dump -Fc) or a backup .zip from the bot itself.';
+
+/**
+ * Turns an upload for a PostgreSQL bot into a pg_dump custom-format file; returns its path. Accepted:
+ * the .dump itself (also gzipped), or a .zip holding one, such as the bot's own backups (data/postgres.dump).
+ * Plain SQL is refused: only psql could import it, and psql runs client-side commands found in the input.
+ */
+export async function preparePgDump(upload: string, work: string): Promise<string> {
+  const output = path.join(work, 'import.dump');
+  const head = Buffer.alloc(4);
+  const handle = await fs.open(upload, 'r');
+  try {
+    await handle.read(head, 0, 4, 0);
+  } finally {
+    await handle.close();
+  }
+
+  if (head[0] === 0x1f && head[1] === 0x8b) {
+    try {
+      await writeCapped(createReadStream(upload).pipe(createGunzip()), output);
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(400, 'bad_gzip', 'The .gz file could not be decompressed.');
+    }
+  } else if (head.toString('latin1') === 'PK\u0003\u0004') {
+    let listing: string;
+    try {
+      listing = (await run('unzip', ['-Z1', upload], { timeoutMs: 120_000 })).stdout;
+    } catch {
+      throw new HttpError(400, 'bad_zip', 'The zip file could not be read.');
+    }
+    const dumps = listing.split('\n').map((e) => e.trim()).filter((e) => /\.dump$/i.test(e));
+    const entry = dumps.includes('data/postgres.dump') ? 'data/postgres.dump' : dumps.length === 1 ? dumps[0] : undefined;
+    if (!entry) {
+      throw new HttpError(400, dumps.length ? 'several_dumps_in_zip' : 'no_dump_in_zip', dumps.length ? `The zip contains several .dump files (${dumps.slice(0, 5).join(', ')}); upload just one.` : `The zip contains no .dump file. ${NOT_PG_DUMP}`);
+    }
+    // unzip treats the name as a pattern: escape wildcard characters so only this entry matches.
+    const child = spawn('unzip', ['-p', upload, entry.replace(/([[\]*?\\])/g, '\\$1')], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const exited = new Promise<number | null>((resolve) => child.on('close', resolve));
+    await writeCapped(child.stdout, output);
+    if ((await exited) !== 0) throw new HttpError(400, 'bad_zip', 'The .dump file could not be extracted from the zip.');
+  } else {
+    await fs.rename(upload, output);
+  }
+
+  if (!(await isPgCustomDump(output))) throw new HttpError(400, 'not_a_dump', NOT_PG_DUMP);
+  return output;
 }
 
 /** Turns an upload (.sql, .sql.gz or .zip with one .sql) into a sanitized dump file; returns its path. */

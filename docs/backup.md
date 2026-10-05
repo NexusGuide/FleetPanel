@@ -12,7 +12,11 @@ backups to Telegram, and those backups are restored with **Import database** aft
 
 MirzaBot and Faoxima send their backups from their cron jobs, which FleetPanel runs since v0.4.2 (see
 [providers.md](providers.md#cron-jobs-of-php-bots)); set the backup chat in each bot's admin menu.
-PasarguardBot schedules its own backups.
+PasarguardBot and PGClockBot schedule their own backups (PGClockBot's are `.zip` files that **Import
+database** accepts as they are).
+
+Bot backups of PostgreSQL bots (PGClockBot) hold `database.dump`, a `pg_dump` custom-format file, instead
+of `database.sql`; a restore replaces the bot's schema with it using `pg_restore` as the bot's own role.
 
 ## Telegram backup
 
