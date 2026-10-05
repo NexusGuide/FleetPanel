@@ -282,6 +282,8 @@ describe('API security', () => {
     const secret = /webhook_secret = '([A-Za-z0-9_-]+)'/.exec(secretUpdate ?? '')?.[1];
     expect(secret).toBeTruthy();
     expect(webhooks).toContain(`https://bot.example.com/index.php?secret=${secret}`);
+    // Its own cron dispatcher runs from a FleetPanel timer.
+    expect(tools.calls.service).toContain('demo-bot:cron:cronbot/run.php');
     expect(createdSites).toContainEqual({ slug: 'demo-bot', auth: 'query' });
 
     const duplicate = await request('POST', '/api/instances', {

@@ -182,6 +182,22 @@ export class InstanceService {
     }
   }
 
+  /**
+   * Called at boot: brings running PHP bots up to date with what this FleetPanel version manages
+   * outside their files (cron timer, nginx rules), so an update needs no Repair. Never throws.
+   */
+  async refreshPhpInstances(): Promise<void> {
+    for (const inst of this.list()) {
+      const provider = PROVIDERS[inst.provider];
+      if (inst.status !== 'running' || provider.runtime !== 'php') continue;
+      try {
+        await this.d.ops.refreshInstance(inst.slug, provider.cronScript);
+      } catch (err) {
+        log.warn(`Could not refresh ${inst.slug} (cron jobs / nginx rules)`, err);
+      }
+    }
+  }
+
   /** Why an instance with these values cannot be created, per field (empty when there is no conflict). */
   conflicts(slug: string, domain: string, botUsername?: string): InstanceConflicts {
     const find = (column: 'slug' | 'domain' | 'bot_username', value: string) =>
@@ -434,6 +450,7 @@ export class InstanceService {
     await step('Registering the Telegram webhook', () =>
       this.d.telegram.setWebhook(ctx.botToken, provider.webhookUrl(ctx), ctx.webhookSecret),
     );
+    await step("Scheduling the bot's cron jobs", () => this.d.ops.refreshInstance(inst.slug, provider.cronScript));
   }
 
   /** A long-running Python bot: its own systemd service and Redis, web server behind nginx. */

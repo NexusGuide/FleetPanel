@@ -32,7 +32,7 @@ Service
   doctor                     Check the whole host and report PASS / WARN / FAIL
   start | stop | restart     Control the panel service (bots keep running)
   logs [N] [-f]              Last N log lines (default 100); -f follows
-  logs SLUG [N] [-f]         Log of a Python bot (PasarguardBot)
+  logs SLUG [N] [-f]         Log of a bot (Python bots: the bot; PHP bots: their cron jobs)
 
 Instances and backups
   instances                  List bot instances
@@ -352,7 +352,8 @@ cmd_doctor() {
   if out="$(nginx -t 2>&1)"; then pass "nginx configuration is valid"; else fail "nginx configuration is invalid: $(printf '%s' "$out" | grep -E 'emerg|error' | tail -n 1)"; fi
   # nginx only warns about duplicate server names, then serves the domain from whichever site sorts first.
   local dup
-  dup="$(printf '%s' "$out" | grep -o 'conflicting server name "[^"]*"' | cut -d'"' -f2 | sort -u | tr '\n' ' ')"
+  # || true: no match is the normal case, and set -e would otherwise end doctor right here.
+  dup="$(printf '%s' "$out" | grep -o 'conflicting server name "[^"]*"' | cut -d'"' -f2 | sort -u | tr '\n' ' ' || true)"
   if [[ -n $dup ]]; then
     warn "Domains served by more than one nginx site (requests may reach the wrong one): ${dup% } — check: grep -l <domain> /etc/nginx/sites-enabled/*"
   fi
@@ -417,8 +418,17 @@ cmd_doctor() {
 
   if [[ -f $DATA_DIR/fleetpanel.db ]]; then
     errors=0
-    while IFS=$'\t' read -r slug _ _ status _; do
+    while IFS=$'\t' read -r slug provider _ status _; do
       [[ $status == error ]] && { errors=$((errors + 1)); warn "Instance $slug is in the error state (see the panel for the reason)"; }
+      # PHP bots: their own cron dispatcher runs from a FleetPanel timer (expiry jobs, payments, backups).
+      if [[ $status == running && ( $provider == mirza || $provider == faoxima ) ]]; then
+        if systemctl is-active --quiet "fleetpanel-cron-$slug.timer"; then
+          pass "Cron jobs of $slug are scheduled"
+        else
+          errors=$((errors + 1))
+          fail "Cron jobs of $slug are not scheduled (restart the panel: sudo fleetpanel restart)"
+        fi
+      fi
       # Service bots (Python) run as their own systemd unit: a running bot must have it active.
       if [[ $status == running && -f /etc/systemd/system/fleetpanel-bot-$slug.service ]]; then
         if systemctl is-active --quiet "fleetpanel-bot-$slug.service"; then
@@ -447,11 +457,15 @@ cmd_logs() {
       -f|--follow) follow=(-f) ;;
       *)
         if [[ $arg =~ ^[0-9]{1,6}$ ]]; then lines="$arg"
-        # A service bot (Python) logs to the journal under its own unit.
+        # A Python bot logs to the journal under its own unit; a PHP bot's cron jobs under theirs.
         elif [[ $arg =~ ^[a-z][a-z0-9-]{1,27}[a-z0-9]$ ]]; then
-          [[ -f /etc/systemd/system/fleetpanel-bot-$arg.service ]] \
-            || die "'$arg' has no bot service: only Python bots have one, and it is created at the end of their installation. Installation errors are in the panel and in: sudo fleetpanel logs"
-          unit="fleetpanel-bot-$arg.service"
+          if [[ -f /etc/systemd/system/fleetpanel-bot-$arg.service ]]; then
+            unit="fleetpanel-bot-$arg.service"
+          elif [[ -f /etc/systemd/system/fleetpanel-cron-$arg.service ]]; then
+            unit="fleetpanel-cron-$arg.service"
+          else
+            die "'$arg' has no service log yet (created at the end of its installation). Installation errors are in the panel and in: sudo fleetpanel logs"
+          fi
         else die "usage: fleetpanel logs [SLUG] [N] [-f]   (SLUG: a Python bot)"; fi
         ;;
     esac
@@ -739,10 +753,11 @@ cmd_firewall() {
 # ---------------------------------------------------------------------------
 # Interactive menu
 
-# The panel's log, or the log of a Python bot (they run as their own services).
+# The panel's log, or a bot's own log (Python bots; the cron jobs of PHP bots).
 logs_menu() {
   local bots=() i choice
-  mapfile -t bots < <(ls /etc/systemd/system/fleetpanel-bot-*.service 2>/dev/null | sed -E 's#.*/fleetpanel-bot-(.*)\.service$#\1#')
+  mapfile -t bots < <(ls /etc/systemd/system/fleetpanel-bot-*.service /etc/systemd/system/fleetpanel-cron-*.service 2>/dev/null \
+    | sed -E 's#.*/fleetpanel-(bot|cron)-(.*)\.service$#\2#' | sort -u)
   if (( ${#bots[@]} == 0 )); then
     cmd_logs 50
     return 0

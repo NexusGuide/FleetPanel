@@ -14,7 +14,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | `fleetpanel doctor` | Runs the checks below and prints `[PASS]`, `[WARN]` or `[FAIL]` for each. Exits non-zero if anything failed. |
 | `fleetpanel start` / `stop` / `restart` | Controls `fleetpanel.service`. Bots keep running when the panel is stopped. |
 | `fleetpanel logs [N] [-f]` | The last N lines (default 100) of the panel's journal; `-f` follows. Secrets are masked before they are logged. |
-| `fleetpanel logs SLUG [N] [-f]` | The journal of a Python bot's service (`fleetpanel-bot-SLUG`). |
+| `fleetpanel logs SLUG [N] [-f]` | A bot's journal: a Python bot's service (`fleetpanel-bot-SLUG`), or a PHP bot's cron jobs (`fleetpanel-cron-SLUG`). |
 
 ### Doctor checks
 
@@ -35,7 +35,7 @@ never as root. Actions taken from the CLI are written to the audit log with the 
 | Composer | not installed |
 | Certificate renewal | *warn* when no certbot timer or cron job exists |
 | Firewall | *warn* when no firewall is active (optional), or ufw is active but ports 80/443 are not allowed |
-| Instances | *warn* for every instance in the error state; *fail* when a running Python bot's service is not active |
+| Instances | *warn* for every instance in the error state; *fail* when a running Python bot's service or a running PHP bot's cron timer is not active |
 
 ## Instances and backups
 

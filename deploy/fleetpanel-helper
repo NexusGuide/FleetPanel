@@ -70,6 +70,7 @@ vhost_link() { printf '%s/fleetpanel-%s.conf' "$NGINX_ENABLED" "$1"; }
 env_file() { printf '%s/%s.env' "$ENV_DIR" "$1"; }
 bot_unit() { printf 'fleetpanel-bot-%s.service' "$1"; }
 redis_unit() { printf 'fleetpanel-redis-%s.service' "$1"; }
+cron_unit() { printf 'fleetpanel-cron-%s' "$1"; }
 unit_path() { printf '/etc/systemd/system/%s' "$1"; }
 # A service bot is one whose environment file exists; it is written by root only.
 is_service_instance() { [[ -f "$(env_file "$1")" ]]; }
@@ -136,6 +137,129 @@ ensure_instance_user() {
 require_instance_dir() {
   local dir="$1"
   [[ -d $dir && ! -L $dir ]] || die "instance directory does not exist"
+}
+
+# FleetPanel runs a PHP bot's cron jobs itself (instance-refresh); nobody outside the server may
+# trigger them over HTTP (a bot's own fallback calls them through 127.0.0.1).
+cron_location_block() {
+  cat <<EOF
+    # FleetPanel: cron scripts, callable from this server only.
+    location ~ ^/(cron|cronbot)/ {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+        location ~ \.php\$ {
+            include snippets/fastcgi-php.conf;
+            fastcgi_pass unix:/run/php/fleetpanel-$1.sock;
+        }
+    }
+EOF
+}
+
+# The bots try to install crontab entries of their own (as the PHP-FPM user). That would be a
+# second, unsupervised scheduler, and a way for a compromised bot to persist: deny it.
+deny_user_crontab() {
+  local user="$1"
+  if [[ -f /etc/cron.allow ]]; then
+    sed -i "/^${user}\$/d" /etc/cron.allow
+  else
+    touch /etc/cron.deny
+    grep -qx "$user" /etc/cron.deny || printf '%s\n' "$user" >> /etc/cron.deny
+  fi
+  if command -v crontab >/dev/null 2>&1; then crontab -r -u "$user" >/dev/null 2>&1 || true; fi
+}
+
+# Instances created before v0.4.2: add the loopback-only cron location and the extra denied paths
+# to the existing site (keeping certbot's TLS lines), or leave it untouched if nginx rejects it.
+harden_vhost() {
+  local slug="$1" vhost tmp
+  vhost="$(vhost_file "$slug")"
+  [[ -f $vhost ]] || return 0
+  grep -q '# FleetPanel: cron scripts' "$vhost" && return 0
+  tmp="$(mktemp)"
+  cron_location_block "$slug" > "$tmp.block"
+  awk -v blockfile="$tmp.block" '
+    !done && /^[[:space:]]*# Telegram webhook: only requests carrying our secret reach PHP/ {
+      while ((getline line < blockfile) > 0) print line
+      print ""
+      done = 1
+    }
+    { print }' "$vhost" \
+    | sed 's#location ~ ^/(config\\.php|config/|vendor/|db/|logs/) { deny all; }#location ~ ^/(config\\.php|config/|vendor/|db/|logs/|storage/|api/handlers/|api/lib/|panel/lib/) { deny all; }\n    location ~ ^/cronbot/(info|gift|broadcast_log\\.on)$ { deny all; }#' > "$tmp"
+  rm -f "$tmp.block"
+  grep -q '# FleetPanel: cron scripts' "$tmp" || { rm -f "$tmp"; return 0; }
+  cp -p "$vhost" "$tmp.orig"
+  cat "$tmp" > "$vhost"
+  if nginx_ok; then
+    systemctl reload nginx
+  else
+    cat "$tmp.orig" > "$vhost"
+    echo "fleetpanel-helper: could not add the cron rules to $vhost (nginx -t failed); left unchanged" >&2
+  fi
+  rm -f "$tmp" "$tmp.orig"
+}
+
+# instance-refresh SLUG CRON_SCRIPT
+# For a PHP bot: runs its cron dispatcher (e.g. cronbot/run.php) every minute as the bot's user in a
+# sandboxed systemd timer, denies the bot a crontab of its own, and brings its nginx site up to date.
+cmd_instance_refresh() {
+  need_args $# 2
+  local slug="$1" script="$2" user dir php unit
+  check_slug "$slug"
+  [[ $script =~ ^[A-Za-z0-9_-]{1,32}/[A-Za-z0-9_-]{1,64}\.php$ ]] || die "invalid cron script"
+  is_service_instance "$slug" && die "instance-refresh is for PHP bots"
+  user="$(instance_user "$slug")"
+  dir="$(instance_dir "$slug")"
+  unit="$(cron_unit "$slug")"
+  require_instance_dir "$dir"
+  [[ -f $dir/$script && ! -L $dir/$script ]] || die "cron script $script not found in the instance"
+  id -u "$user" >/dev/null 2>&1 || die "instance user does not exist (run instance-perms first)"
+  php="$(php_version)"
+  [[ -x /usr/bin/php$php ]] || die "/usr/bin/php$php is missing"
+
+  cat > "/etc/systemd/system/$unit.service" <<EOF
+# Managed by FleetPanel. Instance: $slug
+[Unit]
+Description=FleetPanel cron jobs of $slug
+After=mariadb.service mysql.service
+
+[Service]
+Type=oneshot
+User=$user
+Group=$user
+WorkingDirectory=$dir
+ExecStart=/usr/bin/php$php $dir/$script
+# The dispatchers start some jobs in the background and return: let those finish.
+KillMode=process
+TimeoutStartSec=15min
+Nice=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=$dir
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+MemoryMax=512M
+EOF
+  cat > "/etc/systemd/system/$unit.timer" <<EOF
+# Managed by FleetPanel. Instance: $slug
+[Unit]
+Description=Run the cron jobs of $slug every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+EOF
+  chmod 0644 "/etc/systemd/system/$unit.service" "/etc/systemd/system/$unit.timer"
+  deny_user_crontab "$user"
+  systemctl daemon-reload
+  systemctl enable --now "$unit.timer" >/dev/null 2>&1 || die "the cron timer of $slug did not start"
+  harden_vhost "$slug"
 }
 
 # instance-perms SLUG
@@ -319,7 +443,10 @@ server {
     location ~ /\.(?!well-known/) { deny all; }
     location ~* \.(sql|log|ini|env|bak|sh|lock|md|json|txt|zip|tar|gz|tgz|bz2|xz|7z|rar|db|sqlite|csv|xls|xlsx|pem|key)\$ { deny all; }
     location ~ (^|/)error_log\$ { deny all; }
-    location ~ ^/(config\.php|config/|vendor/|db/|logs/) { deny all; }
+    location ~ ^/(config\.php|config/|vendor/|db/|logs/|storage/|api/handlers/|api/lib/|panel/lib/) { deny all; }
+    location ~ ^/cronbot/(info|gift|broadcast_log\.on)$ { deny all; }
+
+$(cron_location_block "$slug")
 
     # Telegram webhook: only requests carrying our secret reach PHP
     location = /$hook {
@@ -691,6 +818,9 @@ cmd_instance_enable() {
     die "configuration test failed; instance left disabled. ${CONFIG_ERROR}"
   fi
   reload_services "$php"
+  if [[ -f "/etc/systemd/system/$(cron_unit "$slug").timer" ]]; then
+    systemctl enable --now "$(cron_unit "$slug").timer" >/dev/null 2>&1 || true
+  fi
 }
 
 # instance-disable SLUG
@@ -701,6 +831,7 @@ cmd_instance_disable() {
   if is_service_instance "$slug"; then service_disable "$slug"; return; fi
   php="$(php_version)"
   pool="$(pool_file "$slug" "$php")"
+  systemctl disable --now "$(cron_unit "$slug").timer" >/dev/null 2>&1 || true
   rm -f "$(vhost_link "$slug")"
   if [[ -f $pool ]]; then mv -f "$pool" "$pool.disabled"; fi
   config_ok "$php" || die "configuration test failed after disabling. ${CONFIG_ERROR}"
@@ -719,6 +850,10 @@ cmd_instance_remove() {
 
   # A service bot first: stop it before its files and user disappear.
   service_remove "$slug"
+  systemctl disable --now "$(cron_unit "$slug").timer" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/$(cron_unit "$slug").timer" "/etc/systemd/system/$(cron_unit "$slug").service"
+  systemctl daemon-reload
+  if [[ -f /etc/cron.deny ]]; then sed -i "/^$(instance_user "$slug")\$/d" /etc/cron.deny; fi
   rm -f "$(vhost_link "$slug")" "$(vhost_file "$slug")" "$pool" "$pool.disabled"
   if config_ok "$php"; then reload_services "$php"; fi
 
@@ -800,6 +935,7 @@ main() {
     cert-issue)       cmd_cert_issue "$@" ;;
     runtime-python)   cmd_runtime_python "$@" ;;
     instance-env)     cmd_instance_env "$@" ;;
+    instance-refresh) cmd_instance_refresh "$@" ;;
     service-create)   cmd_service_create "$@" ;;
     service-wait)     cmd_service_wait "$@" ;;
     *) die "unknown command '${cmd}'" ;;
