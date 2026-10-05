@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.4.3 (dev channel)
+
+### Added
+- **Bot updates from the panel.** The panel checks the bots' projects every 6 hours (or on *Check for bot
+  updates*) and announces newer versions, which are installed only after they are reviewed and pinned in a
+  FleetPanel release. Bots on an older reviewed version are marked *update*: **Update** one bot, or
+  **Update all** of a type; updates run one at a time.
+- An update keeps the bot's database and the files it created, unlike Repair: safety backup, staged new
+  version, removed upstream files deleted and new files copied as the bot's own user, then dependencies,
+  schema, webhook and cron jobs reapplied. A failure before the bot is stopped leaves it running and
+  unchanged.
+
+### Changed
+- A bot's last message is shown for running and stopped bots too (e.g. *"Update not applied: …"*).
+
 ## v0.4.2 (dev channel)
 
 ### Added

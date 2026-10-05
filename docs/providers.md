@@ -78,7 +78,25 @@ To move a provider to a newer upstream version:
 2. Check the config template, `table.php` and the webhook check still match what the provider expects.
 3. Install it on a test server: create an instance, send `/start`, open its pages, back it up and restore.
 4. Update `commit` and `version` in `src/providers/index.ts` and the table above, and ship it in a
-   FleetPanel release. Existing bots move to the new version when an operator presses **Repair**.
+   FleetPanel release. Existing bots then show **update** in the panel (see below).
+
+## Bot updates
+
+- **New upstream versions are announced, not installed.** Every 6 hours (or *Check for bot updates*) the
+  panel asks GitHub for each project's newest release (Faoxima, PasarguardBot) or newest commit on the
+  tracked branch (MirzaBot) and shows *"… published a newer version"* until it has been reviewed.
+- **Reviewed versions are installed from the panel.** When a FleetPanel update pins a newer version, every
+  bot still running the older one is marked *update*; *Instances* offers **Update** / **Update all** per
+  bot type and each bot's details an **Update bot** button. Updates run one bot at a time.
+- **An update keeps the bot's data**, unlike Repair: a safety backup first; the new version is downloaded
+  into a staging folder and FleetPanel's files are prepared there (rendered config, no web installer,
+  Python placeholders); the bot is stopped; the files the upstream removed since the installed version
+  are deleted and the new version is copied over the bot's folder, **both as the bot's own user**, so a
+  symlink planted by the bot can only redirect writes it could already make; files the bot created
+  (uploads, its own backups, state) are untouched. Then dependencies, schema (`table.php` or alembic),
+  the webhook secret, webhook and cron jobs are reapplied and the bot is started again if it was running.
+- If an update fails before the bot is stopped, nothing changed and the bot keeps running (*"Update not
+  applied"*). If it fails later, the bot is marked *error* with the safety backup to restore.
 
 Both projects ship `config.php` as a template that their own web installer fills in. FleetPanel does the
 installer's work itself, so the web installer is never exposed:

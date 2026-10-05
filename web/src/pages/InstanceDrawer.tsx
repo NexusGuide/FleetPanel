@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Archive, Copy, DatabaseBackup, ExternalLink, Loader2, X } from 'lucide-react';
-import { api, instanceWebUrl, type Instance, type Permission } from '../api';
+import { api, instanceWebUrl, isOutdated, type Instance, type Permission } from '../api';
 import { Button, ErrorBanner, Notice, Spinner, StatusBadge, Time, formatDate, useResource, useToast } from '../components/ui';
 import { InstanceActionButtons } from './InstancesPage';
 import { useInstanceActions } from './instanceActions';
@@ -113,6 +113,32 @@ export function InstanceDrawer({
                     <p className="text-[11px] text-slate-400">
                       Fix the cause above, then press <b>Reprovision</b>. The database and settings are kept.
                     </p>
+                  )}
+                </div>
+              )}
+
+              {inst.status !== 'error' && inst.status !== 'provisioning' && inst.last_error && (
+                <Notice tone="warn">{inst.last_error}</Notice>
+              )}
+
+              {isOutdated(inst, providers.data) && (
+                <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-md border border-blue-900/60 bg-blue-950/30 text-xs text-blue-100">
+                  <span>
+                    A newer reviewed version is available:{' '}
+                    <b>{providers.data?.find((p) => p.id === inst.provider)?.version}</b>.
+                  </span>
+                  {can('instances.create') && (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      loading={actions.isPending(inst.id, 'upgrade')}
+                      onClick={() => {
+                        const p = providers.data?.find((x) => x.id === inst.provider);
+                        void actions.upgrade([inst], p ? `${p.name} ${p.version}` : 'the new version');
+                      }}
+                    >
+                      Update bot
+                    </Button>
                   )}
                 </div>
               )}

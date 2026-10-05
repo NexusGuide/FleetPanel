@@ -45,6 +45,8 @@ interface ProviderBase {
   commit: string;
   /** Human-readable label for that commit, shown in the panel. */
   version: string;
+  /** How the upstream publishes versions: GitHub releases, or commits to a branch. */
+  track: { kind: 'release' } | { kind: 'branch'; branch: string };
   extraFields: ExtraField[];
   /**
    * The bot's own web page the panel links to. Not the site root: for the PHP bots that is the
@@ -157,6 +159,7 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     repoUrl: 'https://github.com/mahdiMGF2/mirzabot.git',
     commit: '8e551ecf73d18dac8cb4b0cbada64c041e660f32',
     version: 'main @ 2026-10-02',
+    track: { kind: 'branch', branch: 'main' },
     extraFields: [],
     webPath: 'panel/',
     runtime: 'php',
@@ -192,6 +195,7 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     repoUrl: 'https://github.com/Mmd-Amir/Faoxima.git',
     commit: '68eccf1981f1bd7f21c8000ad5fff198a0f6c175',
     version: 'v1.1.5',
+    track: { kind: 'release' },
     extraFields: [],
     webPath: 'panel/',
     runtime: 'php',
@@ -230,6 +234,7 @@ export const PROVIDERS: Record<ProviderId, BotProvider> = {
     repoUrl: 'https://github.com/AmirKenzo/PasarguardBot.git',
     commit: 'f9c7c28c99bd9c5d394e68c6e27ae545fa6762aa',
     version: 'v2.1.4',
+    track: { kind: 'release' },
     // Telethon logs in over MTProto, which needs an API id/hash besides the bot token.
     extraFields: ['api_id', 'api_hash'],
     webPath: 'webapp/',

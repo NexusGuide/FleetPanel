@@ -6,13 +6,14 @@ import { SecretBox } from './security/crypto.js';
 import { SessionStore } from './http/sessions.js';
 import { createApp } from './http/app.js';
 import { SudoHelper } from './system/helper.js';
-import { gitCheckout } from './system/git.js';
+import { gitCheckout, gitRemovedFiles } from './system/git.js';
 import { systemToolchain } from './system/toolchain.js';
 import { TelegramApi } from './services/telegram.js';
 import { BackupService } from './services/backups.js';
 import { InstanceService } from './services/instances.js';
 import { ControlBackupService } from './services/controlBackup.js';
 import { SettingsStore } from './settings.js';
+import { UpstreamWatcher } from './services/upstream.js';
 import { log } from './log.js';
 import { VERSION } from './version.js';
 
@@ -43,15 +44,19 @@ function main(): void {
     telegram,
     backups,
     git: gitCheckout,
+    gitRemovedFiles,
     tools: systemToolchain,
     instancesDir: config.instancesDir,
   });
   instances.recoverInterrupted();
   instances.flagMissingInstalls();
 
+  const settings = new SettingsStore(db, box);
+  const upstream = new UpstreamWatcher(settings);
+  upstream.start();
   const controlBackup = new ControlBackupService({
     db,
-    settings: new SettingsStore(db, box),
+    settings,
     telegram,
     audit,
     masterKeyFile: config.masterKeyFile,
@@ -70,6 +75,7 @@ function main(): void {
     instances,
     backups,
     controlBackup,
+    upstream,
     cookieSecure: config.cookieSecure,
     trustProxy: config.trustProxy,
     dataRoot: config.root,

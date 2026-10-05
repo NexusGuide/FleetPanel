@@ -57,6 +57,12 @@ export function instanceRoutes(d: AppDeps): Router {
     }),
   );
 
+  // Update to the reviewed version this FleetPanel pins (data kept). Queued: one bot at a time.
+  const upgrades = rateLimit({ limit: 50, windowMs: 5 * 60_000, key: (req) => `upg|${req.auth?.adminId ?? req.ip}` });
+  r.post('/:id/upgrade', requirePermission('instances.create', d.audit), upgrades, (req, res) => {
+    res.status(202).json({ instance: d.instances.upgrade(intParam(req, 'id'), actorOf(req)) });
+  });
+
   r.post('/:id/reprovision', requirePermission('instances.create', d.audit), sensitive, (req, res) => {
     res.status(202).json({ instance: d.instances.reprovision(intParam(req, 'id'), actorOf(req)) });
   });
