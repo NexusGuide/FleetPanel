@@ -122,9 +122,9 @@ export interface Provider {
 /** An installed bot running an older reviewed version than this FleetPanel pins. */
 export function isOutdated(inst: Instance, providers: Provider[] | null): boolean {
   const pinned = providers?.find((p) => p.id === inst.provider)?.commit;
+  // source_commit null: installed before FleetPanel recorded versions, so not known to be current.
   return (
     !!pinned &&
-    inst.source_commit !== null &&
     inst.source_commit !== pinned &&
     (inst.status === 'running' || inst.status === 'stopped')
   );

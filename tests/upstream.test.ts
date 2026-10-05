@@ -34,6 +34,17 @@ describe('upstream version watcher', () => {
     expect(status.pasarguard).toMatchObject({ newer: false, latest: PROVIDERS.pasarguard.version });
   });
 
+  it('only links to GitHub pages', async () => {
+    const watcher = new UpstreamWatcher(
+      settings(),
+      fakeGithub({
+        'Mmd-Amir/Faoxima/releases/latest': { tag_name: 'v9', published_at: 'x', html_url: 'javascript:alert(document.cookie)' },
+      }),
+    );
+    await watcher.check();
+    expect(watcher.status().faoxima).toMatchObject({ latest: 'v9', url: null });
+  });
+
   it('keeps the last known result when GitHub cannot be reached', async () => {
     const store = settings();
     await new UpstreamWatcher(

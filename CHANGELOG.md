@@ -15,6 +15,16 @@
 ### Changed
 - A bot's last message is shown for running and stopped bots too (e.g. *"Update not applied: …"*).
 
+### Fixed (from a review of v0.4.2–v0.4.3)
+- Starting a PHP bot that was stopped before v0.4.2 now creates its cron timer (it was only created at panel
+  start for running bots); an update of a stopped bot no longer starts its cron timer.
+- Bots installed before FleetPanel recorded versions can be updated too (they were never offered an update).
+- An update no longer fails when the installed commit cannot be fetched any more (e.g. rewritten upstream
+  history); it then copies the new version without deleting files.
+- Staging folders of updates interrupted by a restart are removed at start, and the restart message no longer
+  suggests only Repair (which would replace the bot's files) for a bot that was being updated.
+- Links to new bot versions in the panel must be GitHub pages (they come from GitHub's API answer).
+
 ## v0.4.2 (dev channel)
 
 ### Added

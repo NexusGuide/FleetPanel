@@ -20,6 +20,11 @@ const CHECK_MS = 6 * 3_600_000;
 
 type Fetch = typeof fetch;
 
+/** Links shown in the panel come from GitHub's answer: accept only GitHub pages. */
+function githubUrl(url: unknown): string | null {
+  return typeof url === 'string' && /^https:\/\/github\.com\/[\w./%#?=&-]+$/.test(url) ? url : null;
+}
+
 function repoPath(repoUrl: string): string {
   const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(repoUrl);
   if (!m?.[1]) throw new Error(`not a GitHub repository: ${repoUrl}`);
@@ -58,7 +63,8 @@ export class UpstreamWatcher {
     const checked_at = new Date().toISOString();
     if (provider.track.kind === 'release') {
       const rel = await this.github<{ tag_name: string; published_at: string; html_url: string }>(`${repo}/releases/latest`);
-      return { checked_at, latest: rel.tag_name, latest_date: rel.published_at, url: rel.html_url, newer: rel.tag_name !== provider.version, error: null };
+      const tag = String(rel.tag_name).slice(0, 64);
+      return { checked_at, latest: tag, latest_date: rel.published_at, url: githubUrl(rel.html_url), newer: tag !== provider.version, error: null };
     }
     const branch = provider.track.branch;
     const head = await this.github<{ sha: string; html_url: string; commit: { committer: { date: string } } }>(
@@ -69,7 +75,7 @@ export class UpstreamWatcher {
       checked_at,
       latest: `${branch} @ ${date.slice(0, 10)} (${head.sha.slice(0, 12)})`,
       latest_date: date,
-      url: head.html_url,
+      url: githubUrl(head.html_url),
       newer: head.sha !== provider.commit,
       error: null,
     };

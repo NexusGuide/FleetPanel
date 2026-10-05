@@ -1,4 +1,12 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
+
+function readdirSafe(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { DB } from '../db.js';
@@ -164,12 +172,16 @@ export class InstanceService {
     const result = this.d.db
       .prepare(
         `UPDATE instances SET status = 'error',
-           last_error = 'Interrupted by a control-plane restart. Reprovision or delete this instance.',
+           last_error = 'Interrupted by a control-plane restart. If it was being updated, restore its latest safety backup (Backups); otherwise Reprovision or delete it.',
            updated_at = ${TIMESTAMP}
          WHERE status IN ('provisioning', 'deleting')`,
       )
       .run();
     if (result.changes > 0) log.warn(`Flagged ${result.changes} interrupted instance(s) as error`);
+    // Staging folders of updates cut short by the restart.
+    for (const name of readdirSafe(this.d.instancesDir)) {
+      if (name.startsWith('.upgrade-')) rmSync(path.join(this.d.instancesDir, name), { recursive: true, force: true });
+    }
   }
 
   /**
@@ -272,7 +284,8 @@ export class InstanceService {
 
   /** True when this bot runs an older reviewed version than the one this FleetPanel pins. */
   isOutdated(inst: InstanceRow): boolean {
-    return inst.source_commit !== null && inst.source_commit !== PROVIDERS[inst.provider].commit;
+    // null: installed before FleetPanel recorded versions (v0.3.3), so not known to be current.
+    return inst.source_commit !== PROVIDERS[inst.provider].commit;
   }
 
   /** Upgrades run one after another: each one builds, installs dependencies and restarts a bot. */
@@ -313,8 +326,15 @@ export class InstanceService {
       staging = await fs.mkdtemp(path.join(this.d.instancesDir, `.upgrade-${inst.slug}-`));
       const dir = staging;
       await step(`Downloading ${provider.displayName} ${provider.version}`, () => this.d.git(provider.repoUrl, provider.commit, dir));
-      const removed =
-        from && this.d.gitRemovedFiles ? await step('Comparing with the installed version', () => this.d.gitRemovedFiles!(dir, from, provider.commit)) : [];
+      let removed: string[] = [];
+      if (from && this.d.gitRemovedFiles) {
+        try {
+          removed = await this.d.gitRemovedFiles(dir, from, provider.commit);
+        } catch (err) {
+          // E.g. the installed commit no longer exists upstream: copy the new version without deleting.
+          log.warn(`Could not compare ${inst.slug} with its installed version; no files are removed`, err);
+        }
+      }
       await fs.rm(path.join(dir, '.git'), { recursive: true, force: true });
       const shipsVendor = await exists(path.join(dir, 'vendor', 'autoload.php'));
       await step('Preparing the new version', () => this.prepareStaging(provider, ctx, dir));
@@ -335,7 +355,8 @@ export class InstanceService {
           });
         }
         await this.reapplySettings(inst, provider, ctx);
-        await step("Scheduling the bot's cron jobs", () => this.d.ops.refreshInstance(inst.slug, provider.cronScript));
+        // Only for a running bot: refreshing starts the cron timer. A stopped bot gets it when started.
+        if (wasRunning) await step("Scheduling the bot's cron jobs", () => this.d.ops.refreshInstance(inst.slug, provider.cronScript));
       }
       if (wasRunning) {
         await step('Starting the bot', () => this.d.ops.enableInstance(inst.slug));
@@ -624,6 +645,9 @@ export class InstanceService {
     this.lock(inst);
     try {
       await this.d.ops.enableInstance(inst.slug);
+      // A PHP bot stopped before this FleetPanel version has no cron timer yet: create it on start.
+      const provider = PROVIDERS[inst.provider];
+      if (provider.runtime === 'php') await this.d.ops.refreshInstance(inst.slug, provider.cronScript);
       this.setStatus(id, 'running');
       this.d.audit.write({ actor, action: 'INSTANCE_START', resource: 'instance', resourceId: id, status: 'SUCCESS' });
       return this.get(id);

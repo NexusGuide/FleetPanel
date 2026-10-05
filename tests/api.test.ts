@@ -65,6 +65,7 @@ let server: http.Server;
 let base = '';
 let tmp = '';
 let db: ReturnType<typeof openDb>;
+let removedFilesFails = false;
 
 interface Reply {
   status: number;
@@ -175,7 +176,10 @@ beforeAll(async () => {
     backups,
     instancesDir,
     git: fakeClone,
-    gitRemovedFiles: async () => ['old/legacy.php'],
+    gitRemovedFiles: async () => {
+      if (removedFilesFails) throw new Error('fatal: remote error: upload-pack: not our ref');
+      return ['old/legacy.php'];
+    },
     tools,
   });
   const app = createApp({ db, sessions: new SessionStore(db), audit, instances, backups, controlBackup, cookieSecure: false, trustProxy: false, dataRoot: tmp });
@@ -631,6 +635,45 @@ describe('API security', () => {
     } finally {
       backups.create = realCreate;
     }
+  });
+
+  it('keeps stopped bots stopped through an update and schedules cron jobs when a PHP bot starts', async () => {
+    const { cookie, csrf } = await login('owner', 'Owner-Password-1');
+    const headers = { cookie, 'x-csrf-token': csrf };
+    const list = (await request('GET', '/api/instances', { headers: { cookie } })).body.instances as Array<{ id: number; slug: string }>;
+    const id = list.find((i) => i.slug === 'demo-bot')?.id as number;
+    const wait = async () => {
+      let inst = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+      for (let i = 0; i < 100 && inst.status === 'provisioning'; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        inst = (await request('GET', `/api/instances/${id}`, { headers: { cookie } })).body.instance;
+      }
+      return inst;
+    };
+    expect((await request('POST', `/api/instances/${id}/stop`, { headers })).status).toBe(200);
+
+    // Installed before versions were recorded (null) counts as outdated; the old commit cannot be
+    // compared (gone upstream), which must not block the update.
+    db.prepare('UPDATE instances SET source_commit = NULL WHERE id = ?').run(id);
+    removedFilesFails = true;
+    const realCreate = backups.create.bind(backups);
+    backups.create = async () => ({ id: '20261005T000000Z-upgr0002' }) as Awaited<ReturnType<BackupService['create']>>;
+    const cronBefore = tools.calls.service.filter((c) => c === 'demo-bot:cron:cronbot/run.php').length;
+    try {
+      expect((await request('POST', `/api/instances/${id}/upgrade`, { headers })).status).toBe(202);
+      const inst = await wait();
+      expect(inst.last_error).toBeNull();
+      expect(inst.status).toBe('stopped');
+      expect(inst.source_commit).toBe(PROVIDERS.mirza.commit);
+      // A stopped bot's cron timer is not started by the update...
+      expect(tools.calls.service.filter((c) => c === 'demo-bot:cron:cronbot/run.php').length).toBe(cronBefore);
+    } finally {
+      backups.create = realCreate;
+      removedFilesFails = false;
+    }
+    // ...but when the bot is started.
+    expect((await request('POST', `/api/instances/${id}/start`, { headers })).status).toBe(200);
+    expect(tools.calls.service.filter((c) => c === 'demo-bot:cron:cronbot/run.php').length).toBe(cronBefore + 1);
   });
 
   it('reports real host stats and providers', async () => {
