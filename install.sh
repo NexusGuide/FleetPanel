@@ -152,14 +152,56 @@ if [[ -n $ACME_EMAIL ]]; then printf '%s\n' "$ACME_EMAIL" > /etc/fleetpanel/acme
 CLI=(sudo -u "$SERVICE_USER" env "FLEET_DIR=$FLEET_DIR" node "$APP_DIR/dist/cli.js")
 ADMIN_USER=""
 ADMIN_PASS=""
+ADMIN_PASS_GENERATED=false
+# Same rules as the panel (src/security/validation.ts, src/security/passwords.ts).
+USERNAME_RE='^[A-Za-z0-9_.-]{3,32}$'
+random_alnum() { local s=""; while (( ${#s} < $1 )); do s+="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9')"; done; printf '%s' "${s:0:$1}"; }
+password_problem() {
+  local p="$1" classes=0
+  (( ${#p} >= 12 )) || { echo "at least 12 characters"; return; }
+  (( ${#p} <= 256 )) || { echo "at most 256 characters"; return; }
+  [[ $p =~ [a-z] ]] && classes=$((classes + 1))
+  [[ $p =~ [A-Z] ]] && classes=$((classes + 1))
+  [[ $p =~ [0-9] ]] && classes=$((classes + 1))
+  [[ $p =~ [^A-Za-z0-9] ]] && classes=$((classes + 1))
+  (( classes >= 3 )) || echo "mix at least three of: lowercase, uppercase, digits, symbols"
+}
 if "${CLI[@]}" has-admins; then
   info "An administrator already exists; not creating another one"
 else
   ADMIN_USER="${FLEETPANEL_ADMIN_USER:-}"
-  if [[ -z $ADMIN_USER ]]; then ask ADMIN_USER "Administrator username [admin]: " "admin"; fi
-  RAND="$(openssl rand -base64 30 | tr -dc 'A-Za-z0-9')"
-  ADMIN_PASS="Fp-${RAND:0:22}"
+  if [[ -n $ADMIN_USER ]]; then
+    [[ $ADMIN_USER =~ $USERNAME_RE ]] || die "FLEETPANEL_ADMIN_USER: 3-32 characters of letters, digits, dot, dash, underscore."
+  else
+    while :; do
+      ask ADMIN_USER "Administrator username (Enter = generate one): " ""
+      if [[ -z $ADMIN_USER ]]; then
+        ADMIN_USER="admin-$(random_alnum 8 | tr 'A-Z' 'a-z')"
+        break
+      fi
+      [[ $ADMIN_USER =~ $USERNAME_RE ]] && break
+      warn "Username: 3-32 characters of letters, digits, dot, dash or underscore. Try again."
+    done
+  fi
+  if [[ $HAS_TTY == true ]]; then
+    while :; do
+      read -r -s -p "Administrator password (Enter = generate a strong one): " ADMIN_PASS < /dev/tty || ADMIN_PASS=""
+      echo > /dev/tty
+      [[ -n $ADMIN_PASS ]] || break
+      problem="$(password_problem "$ADMIN_PASS")"
+      if [[ -n $problem ]]; then warn "Password: $problem. Try again."; continue; fi
+      read -r -s -p "Repeat the password: " confirm < /dev/tty || confirm=""
+      echo > /dev/tty
+      [[ $confirm == "$ADMIN_PASS" ]] && break
+      warn "The passwords do not match. Try again."
+    done
+  fi
+  if [[ -z $ADMIN_PASS ]]; then
+    ADMIN_PASS="Fp-$(random_alnum 22)"
+    ADMIN_PASS_GENERATED=true
+  fi
   printf '%s\n' "$ADMIN_PASS" | "${CLI[@]}" create-admin "$ADMIN_USER" --role Owner >/dev/null
+  [[ $ADMIN_PASS_GENERATED == true ]] || ADMIN_PASS=""
 fi
 
 # ---------------------------------------------------------------------------
@@ -297,6 +339,8 @@ if [[ -n $ADMIN_PASS ]]; then
   echo "  Username  : $ADMIN_USER"
   echo "  Password  : $ADMIN_PASS"
   echo "  (shown once and not stored anywhere; change it with: sudo fleetpanel reset-password $ADMIN_USER)"
+elif [[ -n $ADMIN_USER ]]; then
+  echo "  Username  : $ADMIN_USER   (with the password you chose)"
 fi
 echo "  Manage    : sudo fleetpanel          (menu; or: status, doctor, logs, update)"
 echo

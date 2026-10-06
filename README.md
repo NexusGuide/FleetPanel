@@ -34,8 +34,8 @@ On a fresh or existing Ubuntu 24.04+ / Debian 12+ server, as root:
 curl -fsSL https://raw.githubusercontent.com/NexusGuide/FleetPanel/main/install.sh | sudo bash
 ```
 
-It asks for an optional Let's Encrypt email, the first administrator's name and an optional panel domain,
-then prints the panel URL and a one-time password. Details and non-interactive options:
+It asks for an optional Let's Encrypt email, the first administrator's username and password (Enter generates
+strong ones) and an optional panel domain, then prints the panel URL and any generated password once. Details and non-interactive options:
 [installation guide](docs/installation.md).
 
 ### What the installer does (and does not do)
@@ -44,7 +44,8 @@ then prints the panel URL and a one-time password. Details and non-interactive o
 - **Leaves existing services alone:** it never edits or deletes existing nginx sites, databases or
   certificates; FleetPanel only adds its own `fleetpanel-*` files and `fp_*` databases. An existing
   MySQL/MariaDB server is reused.
-- **No default passwords:** the first Owner gets a random password that is shown once and not stored.
+- **No default passwords:** the first Owner chooses a password that meets the panel's rules, or gets a random
+  one that is shown once and not stored.
 - **Privilege separation:** the panel runs as the unprivileged `fleetpanel` user; a single allowlisted
   root helper does the few things that need root.
 - **TLS:** with a panel domain it requests a certificate; without one the panel listens on port `8080`
