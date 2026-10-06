@@ -24,11 +24,14 @@ The installer:
 2. Creates the `fleetpanel` user and `/opt/fleetpanel` with private permissions
 3. Downloads and builds FleetPanel, generates the master key
 4. Installs the root helper, its sudoers rule and the `fleetpanel` CLI
-5. Creates the first **Owner** with a random password, **printed once**
+5. Creates the first **Owner**: it asks for a username and a password (asked twice, hidden). Press Enter at
+   either prompt to have one generated (`admin-xxxxxxxx`, a 25-character password); a generated password
+   is **printed once**. Invalid input is asked again (username: 3-32 letters, digits, `.`, `-`, `_`;
+   password: 12+ characters mixing three of lowercase, uppercase, digits, symbols)
 6. Configures nginx for the panel and, with a domain, requests a certificate
 7. Installs and starts `fleetpanel.service` and waits for its health check
 
-Save the printed password, sign in, then change it under **My account**.
+Save the printed credentials and sign in; a password can be changed under **My account**.
 
 ### Non-interactive options
 
@@ -36,7 +39,7 @@ Save the printed password, sign in, then change it under **My account**.
 | --- | --- |
 | `FLEETPANEL_DOMAIN` | Panel domain (empty: serve on the server IP, port `FLEETPANEL_PANEL_PORT`) |
 | `FLEETPANEL_PANEL_PORT` | Panel port in IP mode (default `8080`) |
-| `FLEETPANEL_ADMIN_USER` | First administrator's username (default `admin`) |
+| `FLEETPANEL_ADMIN_USER` | First administrator's username (otherwise asked; generated when there is no terminal, and so is the password) |
 | `FLEETPANEL_ACME_EMAIL` | Email for Let's Encrypt expiry notices |
 | `FLEETPANEL_REF` | Branch or tag to install; also becomes the update channel (default: the current channel on a re-run, else `main`) |
 
