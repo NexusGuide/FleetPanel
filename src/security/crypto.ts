@@ -41,7 +41,7 @@ export class SecretBox {
     if (separator < 0 || token.slice(0, separator) !== FORMAT) throw new Error('Unsupported ciphertext format');
     const raw = Buffer.from(token.slice(separator + 1), 'base64');
     if (raw.length < IV_BYTES + TAG_BYTES) throw new Error('Ciphertext is truncated');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', this.#key, raw.subarray(0, IV_BYTES));
+    const decipher = crypto.createDecipheriv('aes-256-gcm', this.#key, raw.subarray(0, IV_BYTES), { authTagLength: TAG_BYTES });
     decipher.setAAD(Buffer.from(aad, 'utf8'));
     decipher.setAuthTag(raw.subarray(IV_BYTES, IV_BYTES + TAG_BYTES));
     return Buffer.concat([decipher.update(raw.subarray(IV_BYTES + TAG_BYTES)), decipher.final()]).toString('utf8');
