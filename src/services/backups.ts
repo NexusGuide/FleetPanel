@@ -226,7 +226,7 @@ export class BackupService {
       await fs.rename(path.join(work, inst.slug), dir);
       await this.withClientConfig(inst, (cnf) =>
         // --binary-mode turns off mysql client commands (\\!, system, ...) in non-interactive input.
-        run('mysql', [`--defaults-extra-file=${cnf}`, '--binary-mode', inst.db_name], { input: sql, timeoutMs: 900_000 }),
+        run('mysql', [`--defaults-extra-file=${cnf}`, '--binary-mode', '--local-infile=0', inst.db_name], { input: sql, timeoutMs: 900_000 }),
       );
       await this.d.ops.fixPermissions(inst.slug);
       // The archive has no virtualenv (see backupExcludes); rebuild it from the lock file.

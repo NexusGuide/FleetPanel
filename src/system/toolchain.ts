@@ -39,8 +39,9 @@ export const systemToolchain: Toolchain = {
   },
   async importDump(db, file) {
     await withClientConfig(db, (cnf) =>
-      // --binary-mode turns off mysql client commands (\!, system, ...) in the input.
-      run('mysql', [`--defaults-extra-file=${cnf}`, '--binary-mode', '--default-character-set=utf8mb4', db.dbName], {
+      // --binary-mode turns off mysql client commands (\!, system, ...) in the input; --local-infile=0
+      // stops LOAD DATA LOCAL INFILE in a dump from reading this server's files (e.g. master.key).
+      run('mysql', [`--defaults-extra-file=${cnf}`, '--binary-mode', '--local-infile=0', '--default-character-set=utf8mb4', db.dbName], {
         inputFile: file,
         timeoutMs: 3_600_000,
       }),

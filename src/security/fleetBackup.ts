@@ -88,7 +88,7 @@ export function createRecipient(passphrase: string): BackupRecipient {
 
 function unwrapPrivateKey(wrapped: WrappedKey, passphrase: string): crypto.KeyObject {
   if (wrapped.kdf !== 'scrypt' || wrapped.N > 2 ** 20 || wrapped.r > 16 || wrapped.p > 4) throw new Error('Unsupported key format in backup');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', passphraseKey(passphrase, unb64(wrapped.salt), wrapped), unb64(wrapped.iv));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', passphraseKey(passphrase, unb64(wrapped.salt), wrapped), unb64(wrapped.iv), { authTagLength: 16 });
   decipher.setAAD(Buffer.from(KEY_AAD));
   decipher.setAuthTag(unb64(wrapped.tag));
   let der: Buffer;
@@ -140,7 +140,7 @@ export function sealBackup(plain: Buffer, recipient: BackupRecipient, meta: Back
   const header: Header = { ...base, key: recipient.wrappedKey, iv: b64(iv), tag: b64(cipher.getAuthTag()) };
 
   // Verify: decrypt what was just written.
-  const check = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  const check = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
   check.setAAD(aadOf(base));
   check.setAuthTag(cipher.getAuthTag());
   const roundTrip = Buffer.concat([check.update(body), check.final()]);
@@ -174,7 +174,7 @@ export function openBackup(file: Buffer, passphrase: string): { plain: Buffer; m
   const privateKey = unwrapPrivateKey(header.key, passphrase);
   const ephemeralKey = crypto.createPublicKey({ key: unb64(header.ephemeral), format: 'der', type: 'spki' });
   const key = bodyKey(crypto.diffieHellman({ privateKey, publicKey: ephemeralKey }), header.ephemeral, header.recipient);
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, unb64(header.iv));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, unb64(header.iv), { authTagLength: 16 });
   decipher.setAAD(aadOf(header));
   decipher.setAuthTag(unb64(header.tag));
   let plain: Buffer;
